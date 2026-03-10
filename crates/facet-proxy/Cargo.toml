@@ -16,7 +16,7 @@ aws-smithy-runtime-api = {workspace = true}
 pingora = {workspace = true}
 pingora-core = {workspace = true}
 pingora-proxy = {workspace = true}
-pingora-http = "0.6"
+pingora-http = "0.8"
 url = "2.5"
 
 [dev-dependencies]
