@@ -9,6 +9,7 @@
 //  Contributors:
 //       Metaform Systems, Inc. - initial API and implementation
 //
+use bon::Builder;
 use dataplane_sdk::core::error::HandlerError;
 use dataplane_sdk::core::{
     db::memory::MemoryContext,
@@ -21,17 +22,25 @@ use dataplane_sdk::core::{
     },
 };
 use dsdk_facet_core::token::{TokenData, TokenStore};
+use std::collections::HashSet;
 use std::sync::Arc;
 
 /// DataFlowHandler implementation for Siglet
-#[derive(Clone)]
+#[derive(Clone, Builder)]
 pub struct SigletDataFlowHandler {
     token_store: Arc<dyn TokenStore>,
+    /// Set of transfer types that this handler can process
+    #[builder(default = HashSet::new())]
+    transfer_types: HashSet<String>,
 }
 
 impl SigletDataFlowHandler {
+    /// Creates a new SigletDataFlowHandler with the given token store and no transfer type restrictions
     pub fn new(token_store: Arc<dyn TokenStore>) -> Self {
-        Self { token_store }
+        Self {
+            token_store,
+            transfer_types: HashSet::new(),
+        }
     }
 }
 
@@ -39,9 +48,13 @@ impl SigletDataFlowHandler {
 impl DataFlowHandler for SigletDataFlowHandler {
     type Transaction = <MemoryContext as TransactionalContext>::Transaction;
 
-    async fn can_handle(&self, _flow: &DataFlow) -> HandlerResult<bool> {
-        // TODO: Add logic to check if this Siglet can handle specific flow types
-        Ok(true)
+    async fn can_handle(&self, flow: &DataFlow) -> HandlerResult<bool> {
+        // If no transfer types are configured, accept all flows
+        if self.transfer_types.is_empty() {
+            return Ok(true);
+        }
+
+        Ok(self.transfer_types.contains(&flow.transfer_type))
     }
 
     async fn on_start(&self, _tx: &mut Self::Transaction, _flow: &DataFlow) -> HandlerResult<DataFlowResponseMessage> {
@@ -123,3 +136,6 @@ impl DataFlowHandler for SigletDataFlowHandler {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests;
