@@ -37,3 +37,33 @@ with refresh capabilities. Features include:
 ## Build Requirements
 
 Note `cmake` is required to build the S3 proxy.
+
+## Running Tests
+
+### Unit and Integration Tests
+
+Run all tests:
+```bash
+cargo test
+```
+
+Or use [cargo-nextest](https://nexte.st/) for faster parallel execution (optional but recommended):
+```bash
+# Install nextest (once)
+cargo install cargo-nextest --locked
+
+# Run tests
+cargo nextest run
+```
+
+The project includes a `.config/nextest.toml` configuration that optimizes test execution for testcontainer-based tests.
+
+### E2E Tests
+
+E2E tests require a Kubernetes cluster (Kind). See [e2e/README.md](e2e/README.md) for setup instructions.
+
+```bash
+cd e2e
+make setup    # One-time setup
+make test     # Run e2e tests (auto-detects nextest or falls back to cargo test)
+```

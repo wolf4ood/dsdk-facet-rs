@@ -84,7 +84,8 @@ pub struct KeycloakSetup {
 }
 
 /// Cleans up an existing Docker container by name if it exists
-async fn cleanup_existing_container(container_name: &str) {
+/// Cleans up Keycloak containers from dead processes to prevent name conflicts
+async fn cleanup_old_keycloak_containers() {
     use testcontainers::bollard::Docker;
 
     // Try to connect to Docker
@@ -101,37 +102,110 @@ async fn cleanup_existing_container(container_name: &str) {
     };
 
     if let Some(docker) = docker {
-        use testcontainers::bollard::query_parameters::RemoveContainerOptions;
+        use testcontainers::bollard::query_parameters::{ListContainersOptions, RemoveContainerOptions};
 
-        // Try to remove the container (best effort - ignore errors)
-        let _ = docker
-            .remove_container(
-                container_name,
-                Some(RemoveContainerOptions {
-                    force: true,
-                    ..Default::default()
-                }),
-            )
-            .await;
+        // List all containers
+        let mut filters = std::collections::HashMap::new();
+        filters.insert("name".to_string(), vec!["keycloak-".to_string()]);
+
+        let options = Some(ListContainersOptions {
+            all: true,
+            filters: Some(filters),
+            ..Default::default()
+        });
+
+        if let Ok(containers) = docker.list_containers(options).await {
+            let current_pid = std::process::id();
+
+            for container in containers {
+                if let Some(names) = container.names {
+                    for name in names {
+                        // Parse container name (format: /keycloak-{pid})
+                        if let Some(pid) = parse_keycloak_container_pid(&name) {
+                            // Skip our own process's containers
+                            if pid == current_pid {
+                                continue;
+                            }
+
+                            // Skip containers from processes that are still running
+                            if is_process_running(pid) {
+                                continue;
+                            }
+
+                            // Remove containers from dead processes (best effort - ignore errors)
+                            if let Some(id) = &container.id {
+                                let _ = docker
+                                    .remove_container(
+                                        id,
+                                        Some(RemoveContainerOptions {
+                                            force: true,
+                                            ..Default::default()
+                                        }),
+                                    )
+                                    .await;
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
+}
+
+/// Parses the PID from a Keycloak container name with format: /keycloak-{pid}
+fn parse_keycloak_container_pid(name: &str) -> Option<u32> {
+    // Container names from Docker API start with /
+    let name = name.strip_prefix('/')?;
+
+    if !name.starts_with("keycloak-") {
+        return None;
+    }
+
+    name.strip_prefix("keycloak-")?.parse::<u32>().ok()
+}
+
+/// Checks if a process with the given PID is currently running
+#[cfg(unix)]
+fn is_process_running(pid: u32) -> bool {
+    use std::io::ErrorKind;
+
+    unsafe {
+        let result = libc::kill(pid as i32, 0);
+        if result == 0 {
+            return true;
+        }
+
+        let err = std::io::Error::last_os_error();
+        match err.kind() {
+            ErrorKind::PermissionDenied => true,
+            ErrorKind::NotFound => false,
+            _ => false,
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn is_process_running(_pid: u32) -> bool {
+    true
 }
 
 /// Helper to create and configure a Keycloak container on a specific network
 pub async fn setup_keycloak_container(network: &str) -> (KeycloakSetup, testcontainers::ContainerAsync<GenericImage>) {
-    // Use a fixed hostname for predictable network communication
-    let keycloak_hostname = "keycloak";
+    // Use a unique hostname based on process ID to prevent container name conflicts in parallel tests
+    let pid = std::process::id();
+    let keycloak_hostname = format!("keycloak-{}", pid);
 
-    // Clean up any existing Keycloak container with the same name
-    cleanup_existing_container(keycloak_hostname).await;
+    // Clean up any existing Keycloak containers from dead processes
+    cleanup_old_keycloak_containers().await;
 
     let container = GenericImage::new(KEYCLOAK_IMAGE, KEYCLOAK_TAG)
-        .with_wait_for(WaitFor::message_on_stdout("Profile dev activated"))
+        .with_wait_for(WaitFor::seconds(5))
         .with_exposed_port(ContainerPort::Tcp(KEYCLOAK_PORT))
         .with_env_var("KEYCLOAK_ADMIN", KEYCLOAK_ADMIN_USER)
         .with_env_var("KC_BOOTSTRAP_ADMIN_USERNAME", KEYCLOAK_ADMIN_USER)
         .with_env_var("KC_BOOTSTRAP_ADMIN_PASSWORD", KEYCLOAK_ADMIN_PASSWORD)
         .with_env_var("KC_HEALTH_ENABLED", "true")
-        .with_container_name(keycloak_hostname)
+        .with_container_name(&keycloak_hostname)
         .with_network(network)
         .with_cmd(vec!["start-dev", "--health-enabled=true"])
         .start()
@@ -142,9 +216,9 @@ pub async fn setup_keycloak_container(network: &str) -> (KeycloakSetup, testcont
     let keycloak_url = format!("http://127.0.0.1:{}", host_port);
     let keycloak_internal_url = format!("http://{}:{}", keycloak_hostname, KEYCLOAK_PORT);
 
-    // Wait for Keycloak to be fully ready
+    // Wait for Keycloak to be fully ready (Keycloak can be slow to start, especially in parallel test runs)
     let client = Client::new();
-    let ready = tokio::time::timeout(tokio::time::Duration::from_secs(30), async {
+    let ready = tokio::time::timeout(tokio::time::Duration::from_secs(90), async {
         loop {
             if client
                 .get(format!("{}/realms/master", keycloak_url))
@@ -154,12 +228,12 @@ pub async fn setup_keycloak_container(network: &str) -> (KeycloakSetup, testcont
             {
                 break;
             }
-            tokio::task::yield_now().await;
+            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
         }
     })
     .await;
 
-    assert!(ready.is_ok(), "Keycloak failed to become ready within 30 seconds");
+    assert!(ready.is_ok(), "Keycloak failed to become ready within 90 seconds");
 
     // Disable SSL enforcement after Keycloak is ready
     let exec_result = container

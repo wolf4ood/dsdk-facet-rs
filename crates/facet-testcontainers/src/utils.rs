@@ -11,9 +11,12 @@ pub fn get_available_port() -> u16 {
 
 /// Creates a Docker network and returns its name.
 ///
-/// Automatically cleans up old test networks matching the pattern "test-network-*"
-/// to prevent Docker address pool exhaustion. Networks are not automatically cleaned
-/// up by testcontainers when containers drop, so we must manually remove them.
+/// Automatically cleans up old test networks from dead processes to prevent Docker
+/// address pool exhaustion. Networks are not automatically cleaned up by testcontainers
+/// when containers drop, so we must manually remove them.
+///
+/// Network names include the process ID to avoid race conditions when tests run in parallel.
+/// Each process only cleans up networks from processes that no longer exist.
 ///
 /// Note: Rust Testcontainers lacks network creation functionality (which is available in Go and Java).
 pub async fn create_network() -> String {
@@ -36,10 +39,12 @@ pub async fn create_network() -> String {
         Docker::connect_with_local_defaults().expect("Failed to connect to Docker")
     };
 
-    // Clean up old test networks before creating a new one
+    // Clean up networks from dead processes before creating a new one
     cleanup_old_test_networks(&docker).await;
 
-    let network_name = format!("test-network-{}", uuid::Uuid::new_v4());
+    // Include process ID in network name to prevent race conditions
+    let pid = std::process::id();
+    let network_name = format!("test-network-{}-{}", pid, uuid::Uuid::new_v4());
 
     let config = NetworkCreateRequest {
         name: network_name.clone(),
@@ -54,7 +59,7 @@ pub async fn create_network() -> String {
     network_name
 }
 
-/// Cleans up old test networks to prevent address pool exhaustion
+/// Cleans up test networks from dead processes to prevent address pool exhaustion
 async fn cleanup_old_test_networks(docker: &Docker) {
     use testcontainers::bollard::query_parameters::ListNetworksOptions;
 
@@ -64,13 +69,75 @@ async fn cleanup_old_test_networks(docker: &Docker) {
         Err(_) => return,
     };
 
+    let current_pid = std::process::id();
+
     for network in networks {
         if let Some(name) = &network.name {
-            // Clean up networks matching our test pattern
-            if name.starts_with("test-network-") {
-                // Best effort cleanup - ignore errors
+            // Parse network names matching pattern: test-network-{pid}-{uuid}
+            if let Some(pid) = parse_network_pid(name) {
+                // Skip our own process's networks
+                if pid == current_pid {
+                    continue;
+                }
+
+                // Skip networks from processes that are still running
+                if is_process_running(pid) {
+                    continue;
+                }
+
+                // Remove networks from dead processes (best effort - ignore errors)
                 let _ = docker.remove_network(name).await;
             }
         }
     }
+}
+
+/// Parses the PID from a network name with format: test-network-{pid}-{uuid}
+fn parse_network_pid(name: &str) -> Option<u32> {
+    if !name.starts_with("test-network-") {
+        return None;
+    }
+
+    // Extract the PID part: test-network-{pid}-{uuid}
+    let parts: Vec<&str> = name.strip_prefix("test-network-")?.split('-').collect();
+    if parts.is_empty() {
+        return None;
+    }
+
+    parts[0].parse::<u32>().ok()
+}
+
+/// Checks if a process with the given PID is currently running
+#[cfg(unix)]
+fn is_process_running(pid: u32) -> bool {
+    use std::io::ErrorKind;
+
+    // On Unix systems, we can check if a process exists by trying to send signal 0
+    // This doesn't actually send a signal but checks if the process exists
+    unsafe {
+        // kill(pid, 0) returns 0 if process exists and we have permission to signal it
+        // Returns -1 with ESRCH if process doesn't exist
+        // Returns -1 with EPERM if process exists but we can't signal it (still alive)
+        let result = libc::kill(pid as i32, 0);
+        if result == 0 {
+            return true;
+        }
+
+        // Check errno to distinguish between "no such process" and "permission denied"
+        let err = std::io::Error::last_os_error();
+        match err.kind() {
+            ErrorKind::PermissionDenied => true, // Process exists but we can't signal it
+            ErrorKind::NotFound => false,        // ESRCH: No such process
+            _ => false,
+        }
+    }
+}
+
+/// Checks if a process with the given PID is currently running
+#[cfg(not(unix))]
+fn is_process_running(_pid: u32) -> bool {
+    // On non-Unix systems, conservatively assume the process is still running
+    // This means we won't clean up networks on Windows, but that's safer than
+    // potentially deleting networks from running processes
+    true
 }

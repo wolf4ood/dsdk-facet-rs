@@ -39,11 +39,22 @@ fi
 echo "Running E2E tests..."
 cd "${WORKSPACE_ROOT}"
 
-# Run with --ignored flag to run tests marked with #[ignore]
-# IMPORTANT: --test-threads=1 is required because E2E tests share pod names and infrastructure
-cargo test --package dsdk-facet-e2e-tests --features e2e -- --ignored --test-threads=1 --nocapture
-
-TEST_EXIT_CODE=$?
+# Detect if cargo-nextest is available
+if command -v cargo-nextest &> /dev/null; then
+    echo "Using cargo-nextest for test execution..."
+    # Run with --run-ignored only to run tests marked with #[ignore]
+    # Tests now support parallel execution with unique pod names
+    cargo nextest run --package dsdk-facet-e2e-tests --features e2e --run-ignored only --no-capture
+    TEST_EXIT_CODE=$?
+else
+    echo "cargo-nextest not found, falling back to cargo test"
+    echo "For faster test execution, install nextest:"
+    echo "  cargo install cargo-nextest --locked"
+    echo ""
+    # Run with --ignored flag to run tests marked with #[ignore]
+    cargo test --package dsdk-facet-e2e-tests --features e2e -- --ignored --nocapture
+    TEST_EXIT_CODE=$?
+fi
 
 echo ""
 if [ $TEST_EXIT_CODE -eq 0 ]; then

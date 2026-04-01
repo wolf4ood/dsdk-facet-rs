@@ -81,7 +81,7 @@ async fn test_siglet_deployment_and_health() -> Result<()> {
     Ok(())
 }
 
-/// Test Signaling API operations
+/// Test provider Signaling API operations
 ///
 /// This test verifies:
 /// - DataFlow start via Signaling API (accessed via port-forward)
@@ -89,7 +89,7 @@ async fn test_siglet_deployment_and_health() -> Result<()> {
 /// - Token generation and inclusion in response
 #[tokio::test]
 #[ignore]
-async fn test_signaling_operations() -> Result<()> {
+async fn test_provider_signaling_operations() -> Result<()> {
     let deployment = ensure_siglet_deployed().await?;
 
     // Get the port-forwarded URL for the Signaling API

@@ -290,6 +290,50 @@ pub fn kubectl_delete(manifest_path: &str) -> Result<()> {
     Ok(())
 }
 
+/// Apply Kubernetes manifest from a string (using stdin)
+pub fn kubectl_apply_stdin(manifest_content: &str) -> Result<()> {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let mut child = Command::new("kubectl")
+        .args(["apply", "-f", "-"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("Failed to spawn kubectl apply")?;
+
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin
+            .write_all(manifest_content.as_bytes())
+            .context("Failed to write manifest to kubectl stdin")?;
+    }
+
+    let output = child.wait_with_output().context("Failed to wait for kubectl apply")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!("Failed to apply manifest from stdin: {}", stderr);
+    }
+
+    Ok(())
+}
+
+/// Delete a pod by name
+pub fn kubectl_delete_pod(namespace: &str, pod_name: &str) -> Result<()> {
+    let output = Command::new("kubectl")
+        .args(["delete", "pod", pod_name, "-n", namespace, "--ignore-not-found"])
+        .output()
+        .context("Failed to delete pod")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!("Failed to delete pod {}: {}", pod_name, stderr);
+    }
+
+    Ok(())
+}
+
 /// Get Vault root token from secret
 pub fn get_vault_root_token(namespace: &str) -> Result<String> {
     let output = Command::new("kubectl")

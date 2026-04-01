@@ -46,13 +46,46 @@ Builds use **cargo-chef** for dependency caching:
 
 No configuration needed - automatically enabled on macOS and Linux.
 
+## Test Runner
+
+This project supports both `cargo test` and `cargo nextest`. Nextest is **optional but recommended** for:
+- Faster test execution with better parallelization
+- Cleaner output with per-test timing
+- Automatic retry of flaky tests
+- JUnit report generation for CI
+
+### Install cargo-nextest (optional)
+
+```bash
+cargo install cargo-nextest --locked
+```
+
+The Makefile and scripts automatically detect if nextest is installed and use it when available, falling back to `cargo test` if not.
+
 ## Run Specific Tests
+
+### With cargo-nextest (recommended)
 
 ```bash
 # Just Siglet tests
-cargo test --package dsdk-facet-e2e-tests --features e2e siglet_e2e -- --ignored
+cargo nextest run --package dsdk-facet-e2e-tests --features e2e --run-ignored only -E 'test(siglet_e2e)'
+
+# Single test
+cargo nextest run --package dsdk-facet-e2e-tests --features e2e --run-ignored only -E 'test(test_signaling_operations)' --no-capture
+
+# All e2e tests
+cargo nextest run --package dsdk-facet-e2e-tests --features e2e --run-ignored only
+```
+
+### With cargo test (fallback)
+
+```bash
+# All e2e tests
+cargo test --package dsdk-facet-e2e-tests --features e2e -- --ignored --nocapture
 
 # Single test
 cargo test --package dsdk-facet-e2e-tests --features e2e test_signaling_operations -- --ignored --nocapture
 ```
+
+**Note**: Tests support parallel execution thanks to unique pod names (PID-based). Up to 2 e2e tests can run concurrently with nextest.
  

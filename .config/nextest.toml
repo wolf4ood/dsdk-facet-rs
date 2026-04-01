@@ -32,10 +32,12 @@ threads-required = 1
 slow-timeout = { period = "120s" }
 
 [[profile.default.overrides]]
-# E2E tests package needs serial execution
+# E2E tests interact with Kubernetes cluster and need longer timeouts
+# Now supports parallel execution thanks to unique pod names (PID-based)
 filter = 'package(dsdk-facet-e2e-tests)'
-threads-required = 1
-slow-timeout = { period = "90s" }
+slow-timeout = { period = "180s" }
+# Allow up to 2 e2e tests to run concurrently to avoid overwhelming the cluster
+threads-required = 2
 
 [profile.ci]
 # CI-specific settings
