@@ -42,6 +42,7 @@ async fn test_get_token_not_expiring_does_not_refresh() {
                 refresh_token: "refresh".to_string(),
                 expires_at: Utc::now() + TimeDelta::seconds(60),
                 refresh_endpoint: "https://example.com/refresh".to_string(),
+                endpoint: "https://example.com/data".to_string(),
             })
         });
 
@@ -59,7 +60,7 @@ async fn test_get_token_not_expiring_does_not_refresh() {
     let pc = &ParticipantContext::builder().id("participant1").build();
 
     let result = token_api.get_token(pc, "identifier1", "owner1").await.unwrap();
-    assert_eq!(result, "active_token");
+    assert_eq!(result.token, "active_token");
 }
 
 #[tokio::test]
@@ -92,6 +93,7 @@ async fn test_get_token_expiring_soon_triggers_refresh() {
                 refresh_token: "old_refresh".to_string(),
                 expires_at: Utc::now() + TimeDelta::seconds(10),
                 refresh_endpoint: "https://example.com/refresh".to_string(),
+                endpoint: "https://example.com/data".to_string(),
             })
         });
 
@@ -120,6 +122,7 @@ async fn test_get_token_expiring_soon_triggers_refresh() {
                 refresh_token: "new_refresh".to_string(),
                 expires_at: Utc::now() + TimeDelta::seconds(3600),
                 refresh_endpoint: "https://example.com/refresh".to_string(),
+                endpoint: "https://example.com/data".to_string(),
             })
         });
 
@@ -137,7 +140,7 @@ async fn test_get_token_expiring_soon_triggers_refresh() {
     let pc = &ParticipantContext::builder().id("participant1").build();
 
     let result = token_api.get_token(pc, "identifier1", "owner1").await.unwrap();
-    assert_eq!(result, "new_token");
+    assert_eq!(result.token, "new_token");
 }
 
 #[tokio::test]
@@ -170,6 +173,7 @@ async fn test_get_token_expired_triggers_refresh() {
                 refresh_token: "refresh".to_string(),
                 expires_at: Utc::now() - TimeDelta::seconds(10),
                 refresh_endpoint: "https://example.com/refresh".to_string(),
+                endpoint: "https://example.com/data".to_string(),
             })
         });
 
@@ -188,6 +192,7 @@ async fn test_get_token_expired_triggers_refresh() {
             refresh_token: "new_refresh".to_string(),
             expires_at: Utc::now() + TimeDelta::seconds(3600),
             refresh_endpoint: "https://example.com/refresh".to_string(),
+            endpoint: "https://example.com/data".to_string(),
         })
     });
 
@@ -201,7 +206,7 @@ async fn test_get_token_expired_triggers_refresh() {
     let pc = &ParticipantContext::builder().id("participant1").build();
 
     let result = token_api.get_token(pc, "identifier1", "owner1").await.unwrap();
-    assert_eq!(result, "refreshed_token");
+    assert_eq!(result.token, "refreshed_token");
 }
 
 #[tokio::test]
@@ -234,6 +239,7 @@ async fn test_refresh_updates_stored_token() {
                 refresh_token: "old_refresh".to_string(),
                 expires_at: Utc::now() + TimeDelta::seconds(3),
                 refresh_endpoint: "https://example.com/refresh".to_string(),
+                endpoint: "https://example.com/data".to_string(),
             })
         });
 
@@ -253,6 +259,7 @@ async fn test_refresh_updates_stored_token() {
             refresh_token: "new_refresh_token".to_string(),
             expires_at: Utc::now() + TimeDelta::seconds(3600),
             refresh_endpoint: "https://example.com/refresh".to_string(),
+            endpoint: "https://example.com/data".to_string(),
         })
     });
 
@@ -298,6 +305,7 @@ async fn test_refresh_failure_returns_error() {
                 refresh_token: "refresh".to_string(),
                 expires_at: Utc::now() + TimeDelta::seconds(3),
                 refresh_endpoint: "https://example.com/refresh".to_string(),
+                endpoint: "https://example.com/data".to_string(),
             })
         });
 
@@ -353,6 +361,7 @@ async fn test_lock_acquired_during_refresh() {
                 refresh_token: "refresh".to_string(),
                 expires_at: Utc::now() + TimeDelta::seconds(3),
                 refresh_endpoint: "https://example.com/refresh".to_string(),
+                endpoint: "https://example.com/data".to_string(),
             })
         });
 
@@ -371,6 +380,7 @@ async fn test_lock_acquired_during_refresh() {
             refresh_token: "new_refresh".to_string(),
             expires_at: Utc::now() + TimeDelta::seconds(3600),
             refresh_endpoint: "https://example.com/refresh".to_string(),
+            endpoint: "https://example.com/data".to_string(),
         })
     });
 
@@ -425,6 +435,7 @@ async fn test_lock_prevents_concurrent_refresh() {
                 refresh_token: "refresh".to_string(),
                 expires_at: initial_time + TimeDelta::seconds(3),
                 refresh_endpoint: "https://example.com/refresh".to_string(),
+                endpoint: "https://example.com/data".to_string(),
             })
         });
 
@@ -514,6 +525,7 @@ async fn test_refresh_with_custom_refresh_threshold() {
                 refresh_token: "refresh".to_string(),
                 expires_at: Utc::now() + TimeDelta::seconds(20),
                 refresh_endpoint: "https://example.com/refresh".to_string(),
+                endpoint: "https://example.com/data".to_string(),
             })
         });
 
@@ -532,6 +544,7 @@ async fn test_refresh_with_custom_refresh_threshold() {
             refresh_token: "new_refresh".to_string(),
             expires_at: Utc::now() + TimeDelta::seconds(3600),
             refresh_endpoint: "https://example.com/refresh".to_string(),
+            endpoint: "https://example.com/data".to_string(),
         })
     });
 
@@ -548,7 +561,7 @@ async fn test_refresh_with_custom_refresh_threshold() {
     let pc = &ParticipantContext::builder().id("participant1").build();
 
     let result = token_api.get_token(pc, "identifier1", "owner1").await.unwrap();
-    assert_eq!(result, "refreshed");
+    assert_eq!(result.token, "refreshed");
 }
 
 #[tokio::test]
@@ -580,6 +593,7 @@ async fn test_multiple_tokens_independent_refresh() {
                 refresh_token: "refresh1".to_string(),
                 expires_at: Utc::now() + TimeDelta::seconds(3),
                 refresh_endpoint: "https://example.com/refresh".to_string(),
+                endpoint: "https://example.com/data".to_string(),
             })
         });
 
@@ -595,6 +609,7 @@ async fn test_multiple_tokens_independent_refresh() {
                 refresh_token: "refresh2".to_string(),
                 expires_at: Utc::now() + TimeDelta::seconds(100),
                 refresh_endpoint: "https://example.com/refresh".to_string(),
+                endpoint: "https://example.com/data".to_string(),
             })
         });
 
@@ -622,6 +637,7 @@ async fn test_multiple_tokens_independent_refresh() {
                 refresh_token: "new_refresh1".to_string(),
                 expires_at: Utc::now() + TimeDelta::seconds(3600),
                 refresh_endpoint: "https://example.com/refresh".to_string(),
+                endpoint: "https://example.com/data".to_string(),
             })
         });
 
@@ -639,9 +655,9 @@ async fn test_multiple_tokens_independent_refresh() {
 
     // token1 should trigger refresh
     let result1 = token_api.get_token(pc, "token1", "owner1").await.unwrap();
-    assert_eq!(result1, "refreshed1");
+    assert_eq!(result1.token, "refreshed1");
 
     // token2 should not refresh
     let result2 = token_api.get_token(pc, "token2", "owner1").await.unwrap();
-    assert_eq!(result2, "token2");
+    assert_eq!(result2.token, "token2");
 }

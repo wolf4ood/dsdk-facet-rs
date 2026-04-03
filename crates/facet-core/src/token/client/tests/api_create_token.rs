@@ -13,6 +13,7 @@
 use super::mocks::{MockLockManager, MockTokenClient, MockTokenStore, create_dummy_lock_guard};
 use crate::token::TokenError;
 use crate::token::client::TokenClientApi;
+use crate::token::client::TokenData;
 use chrono::{TimeDelta, Utc};
 use mockall::predicate::eq;
 use std::sync::Arc;
@@ -48,12 +49,15 @@ async fn test_create_token_success() {
     let expires_at = Utc::now() + TimeDelta::hours(1);
     let result = token_api
         .save_token(
-            "participant1",
-            "test_identifier",
-            "test_token",
-            "test_refresh_token",
-            "https://example.com/refresh",
-            expires_at,
+            TokenData {
+                participant_context: "participant1".to_string(),
+                identifier: "test_identifier".to_string(),
+                token: "test_token".to_string(),
+                refresh_token: "test_refresh_token".to_string(),
+                refresh_endpoint: "https://example.com/refresh".to_string(),
+                expires_at,
+                endpoint: "https://example.com/data".to_string(),
+            },
             "owner1",
         )
         .await;
@@ -94,12 +98,15 @@ async fn test_create_token_saves_correct_data() {
 
     let result = token_api
         .save_token(
-            "participant1",
-            "service_a",
-            "access_token_123",
-            "refresh_token_456",
-            "https://auth.example.com/token",
-            expected_expires_at,
+            TokenData {
+                participant_context: "participant1".to_string(),
+                identifier: "service_a".to_string(),
+                token: "access_token_123".to_string(),
+                refresh_token: "refresh_token_456".to_string(),
+                refresh_endpoint: "https://auth.example.com/token".to_string(),
+                expires_at: expected_expires_at,
+                endpoint: "https://example.com/data".to_string(),
+            },
             "admin",
         )
         .await;
@@ -129,12 +136,15 @@ async fn test_create_token_acquires_lock() {
 
     let result = token_api
         .save_token(
-            "participant1",
-            "critical_token",
-            "token",
-            "refresh",
-            "https://example.com/refresh",
-            Utc::now() + TimeDelta::hours(1),
+            TokenData {
+                participant_context: "participant1".to_string(),
+                identifier: "critical_token".to_string(),
+                token: "token".to_string(),
+                refresh_token: "refresh".to_string(),
+                refresh_endpoint: "https://example.com/refresh".to_string(),
+                expires_at: Utc::now() + TimeDelta::hours(1),
+                endpoint: "https://example.com/data".to_string(),
+            },
             "service_owner",
         )
         .await;
@@ -170,12 +180,15 @@ async fn test_create_token_lock_failure() {
 
     let result = token_api
         .save_token(
-            "participant1",
-            "test",
-            "token",
-            "refresh",
-            "https://example.com/refresh",
-            Utc::now() + TimeDelta::hours(1),
+            TokenData {
+                participant_context: "participant1".to_string(),
+                identifier: "test".to_string(),
+                token: "token".to_string(),
+                refresh_token: "refresh".to_string(),
+                refresh_endpoint: "https://example.com/refresh".to_string(),
+                expires_at: Utc::now() + TimeDelta::hours(1),
+                endpoint: "https://example.com/data".to_string(),
+            },
             "owner1",
         )
         .await;
@@ -213,12 +226,15 @@ async fn test_create_token_store_failure() {
 
     let result = token_api
         .save_token(
-            "participant1",
-            "test",
-            "token",
-            "refresh",
-            "https://example.com/refresh",
-            Utc::now() + TimeDelta::hours(1),
+            TokenData {
+                participant_context: "participant1".to_string(),
+                identifier: "test".to_string(),
+                token: "token".to_string(),
+                refresh_token: "refresh".to_string(),
+                refresh_endpoint: "https://example.com/refresh".to_string(),
+                expires_at: Utc::now() + TimeDelta::hours(1),
+                endpoint: "https://example.com/data".to_string(),
+            },
             "owner1",
         )
         .await;
@@ -266,24 +282,30 @@ async fn test_create_token_with_different_owners() {
 
     let result1 = token_api
         .save_token(
-            "participant1",
-            "token1",
-            "token_a",
-            "refresh_a",
-            "https://example.com/refresh",
-            expires_at,
+            TokenData {
+                participant_context: "participant1".to_string(),
+                identifier: "token1".to_string(),
+                token: "token_a".to_string(),
+                refresh_token: "refresh_a".to_string(),
+                refresh_endpoint: "https://example.com/refresh".to_string(),
+                expires_at,
+                endpoint: "https://example.com/data".to_string(),
+            },
             "owner_a",
         )
         .await;
 
     let result2 = token_api
         .save_token(
-            "participant1",
-            "token1",
-            "token_b",
-            "refresh_b",
-            "https://example.com/refresh",
-            expires_at,
+            TokenData {
+                participant_context: "participant1".to_string(),
+                identifier: "token1".to_string(),
+                token: "token_b".to_string(),
+                refresh_token: "refresh_b".to_string(),
+                refresh_endpoint: "https://example.com/refresh".to_string(),
+                expires_at,
+                endpoint: "https://example.com/data".to_string(),
+            },
             "owner_b",
         )
         .await;
@@ -314,12 +336,15 @@ async fn test_create_token_with_various_expiry_times() {
     // Token expiring in 1 hour
     let result1 = token_api
         .save_token(
-            "participant1",
-            "token1",
-            "t1",
-            "r1",
-            "https://example.com/refresh",
-            Utc::now() + TimeDelta::hours(1),
+            TokenData {
+                participant_context: "participant1".to_string(),
+                identifier: "token1".to_string(),
+                token: "t1".to_string(),
+                refresh_token: "r1".to_string(),
+                refresh_endpoint: "https://example.com/refresh".to_string(),
+                expires_at: Utc::now() + TimeDelta::hours(1),
+                endpoint: "https://example.com/data".to_string(),
+            },
             "owner",
         )
         .await;
@@ -327,12 +352,15 @@ async fn test_create_token_with_various_expiry_times() {
     // Token expiring in 24 hours
     let result2 = token_api
         .save_token(
-            "participant1",
-            "token2",
-            "t2",
-            "r2",
-            "https://example.com/refresh",
-            Utc::now() + TimeDelta::days(1),
+            TokenData {
+                participant_context: "participant1".to_string(),
+                identifier: "token2".to_string(),
+                token: "t2".to_string(),
+                refresh_token: "r2".to_string(),
+                refresh_endpoint: "https://example.com/refresh".to_string(),
+                expires_at: Utc::now() + TimeDelta::days(1),
+                endpoint: "https://example.com/data".to_string(),
+            },
             "owner",
         )
         .await;
@@ -340,12 +368,15 @@ async fn test_create_token_with_various_expiry_times() {
     // Token expiring in 30 days
     let result3 = token_api
         .save_token(
-            "participant1",
-            "token3",
-            "t3",
-            "r3",
-            "https://example.com/refresh",
-            Utc::now() + TimeDelta::days(30),
+            TokenData {
+                participant_context: "participant1".to_string(),
+                identifier: "token3".to_string(),
+                token: "t3".to_string(),
+                refresh_token: "r3".to_string(),
+                refresh_endpoint: "https://example.com/refresh".to_string(),
+                expires_at: Utc::now() + TimeDelta::days(30),
+                endpoint: "https://example.com/data".to_string(),
+            },
             "owner",
         )
         .await;
@@ -386,12 +417,15 @@ async fn test_create_token_with_special_characters() {
 
     let result = token_api
         .save_token(
-            "participant1",
-            "service:prod:api",
-            jwt_like_token,
-            jwt_like_token,
-            "https://example.com/refresh",
-            Utc::now() + TimeDelta::hours(1),
+            TokenData {
+                participant_context: "participant1".to_string(),
+                identifier: "service:prod:api".to_string(),
+                token: jwt_like_token.to_string(),
+                refresh_token: jwt_like_token.to_string(),
+                refresh_endpoint: "https://example.com/refresh".to_string(),
+                expires_at: Utc::now() + TimeDelta::hours(1),
+                endpoint: "https://example.com/data".to_string(),
+            },
             "owner",
         )
         .await;
@@ -421,12 +455,15 @@ async fn test_create_token_does_not_call_token_client() {
 
     let result = token_api
         .save_token(
-            "participant1",
-            "test",
-            "token",
-            "refresh",
-            "https://example.com/refresh",
-            Utc::now() + TimeDelta::hours(1),
+            TokenData {
+                participant_context: "participant1".to_string(),
+                identifier: "test".to_string(),
+                token: "token".to_string(),
+                refresh_token: "refresh".to_string(),
+                refresh_endpoint: "https://example.com/refresh".to_string(),
+                expires_at: Utc::now() + TimeDelta::hours(1),
+                endpoint: "https://example.com/data".to_string(),
+            },
             "owner",
         )
         .await;
@@ -462,24 +499,30 @@ async fn test_create_multiple_tokens_same_identifier() {
 
     let result1 = token_api
         .save_token(
-            "participant1",
-            "same_id",
-            "token_v1",
-            "refresh_v1",
-            "https://example.com/refresh",
-            expires_at,
+            TokenData {
+                participant_context: "participant1".to_string(),
+                identifier: "same_id".to_string(),
+                token: "token_v1".to_string(),
+                refresh_token: "refresh_v1".to_string(),
+                refresh_endpoint: "https://example.com/refresh".to_string(),
+                expires_at,
+                endpoint: "https://example.com/data".to_string(),
+            },
             "owner",
         )
         .await;
 
     let result2 = token_api
         .save_token(
-            "participant1",
-            "same_id",
-            "token_v2",
-            "refresh_v2",
-            "https://example.com/refresh",
-            expires_at,
+            TokenData {
+                participant_context: "participant1".to_string(),
+                identifier: "same_id".to_string(),
+                token: "token_v2".to_string(),
+                refresh_token: "refresh_v2".to_string(),
+                refresh_endpoint: "https://example.com/refresh".to_string(),
+                expires_at,
+                endpoint: "https://example.com/data".to_string(),
+            },
             "owner",
         )
         .await;
@@ -513,12 +556,15 @@ async fn test_create_token_with_empty_refresh_endpoint() {
 
     let result = token_api
         .save_token(
-            "participant1",
-            "test",
-            "token",
-            "refresh",
-            "",
-            Utc::now() + TimeDelta::hours(1),
+            TokenData {
+                participant_context: "participant1".to_string(),
+                identifier: "test".to_string(),
+                token: "token".to_string(),
+                refresh_token: "refresh".to_string(),
+                refresh_endpoint: "".to_string(),
+                expires_at: Utc::now() + TimeDelta::hours(1),
+                endpoint: "https://example.com/data".to_string(),
+            },
             "owner",
         )
         .await;
@@ -554,12 +600,15 @@ async fn test_create_token_with_long_identifier() {
 
     let result = token_api
         .save_token(
-            "participant1",
-            long_identifier,
-            "token",
-            "refresh",
-            "https://example.com/refresh",
-            Utc::now() + TimeDelta::hours(1),
+            TokenData {
+                participant_context: "participant1".to_string(),
+                identifier: long_identifier.to_string(),
+                token: "token".to_string(),
+                refresh_token: "refresh".to_string(),
+                refresh_endpoint: "https://example.com/refresh".to_string(),
+                expires_at: Utc::now() + TimeDelta::hours(1),
+                endpoint: "https://example.com/data".to_string(),
+            },
             "owner",
         )
         .await;
@@ -601,12 +650,15 @@ async fn test_create_token_preserves_all_parameters() {
 
     let result = token_api
         .save_token(
-            "participant1",
-            "api_key_123",
-            "access_super_secret_123",
-            "refresh_super_secret_456",
-            expected_endpoint,
-            expected_expires_at,
+            TokenData {
+                participant_context: "participant1".to_string(),
+                identifier: "api_key_123".to_string(),
+                token: "access_super_secret_123".to_string(),
+                refresh_token: "refresh_super_secret_456".to_string(),
+                refresh_endpoint: expected_endpoint.to_string(),
+                expires_at: expected_expires_at,
+                endpoint: "https://example.com/data".to_string(),
+            },
             "system_admin",
         )
         .await;
@@ -635,12 +687,15 @@ async fn test_create_token_lock_error_variations() {
 
     let result = token_api
         .save_token(
-            "participant1",
-            "test",
-            "token",
-            "refresh",
-            "https://example.com/refresh",
-            Utc::now() + TimeDelta::hours(1),
+            TokenData {
+                participant_context: "participant1".to_string(),
+                identifier: "test".to_string(),
+                token: "token".to_string(),
+                refresh_token: "refresh".to_string(),
+                refresh_endpoint: "https://example.com/refresh".to_string(),
+                expires_at: Utc::now() + TimeDelta::hours(1),
+                endpoint: "https://example.com/data".to_string(),
+            },
             "owner",
         )
         .await;

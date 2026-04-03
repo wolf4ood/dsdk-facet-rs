@@ -81,15 +81,16 @@ async fn test_siglet_deployment_and_health() -> Result<()> {
     Ok(())
 }
 
-/// Test provider Signaling API operations
+/// Test consumer-provider pull interaction
 ///
-/// This test verifies:
-/// - DataFlow start via Signaling API (accessed via port-forward)
-/// - DataFlow termination via Signaling API
-/// - Token generation and inclusion in response
+/// This test verifies the complete pull transfer flow:
+/// - Consumer calls prepare endpoint (no data address returned)
+/// - Provider calls start endpoint and returns data address with tokens
+/// - Consumer calls started endpoint with provider's data address
+/// - Provider terminates the transfer
 #[tokio::test]
 #[ignore]
-async fn test_provider_signaling_operations() -> Result<()> {
+async fn test_pull_operations() -> Result<()> {
     let deployment = ensure_siglet_deployed().await?;
 
     // Get the port-forwarded URL for the Signaling API
@@ -98,27 +99,62 @@ async fn test_provider_signaling_operations() -> Result<()> {
     // Create HTTP client
     let client = Client::new();
 
-    // Create a DataFlow start message
-    let start_message = serde_json::json!({
+    // Step 1: Consumer calls prepare endpoint
+    println!("Step 1: Consumer calling prepare endpoint");
+    let prepare_message = serde_json::json!({
         "datasetId": "test-dataset-123",
-        "participantId": "did:web:provider.example.com",
-        "processId": "test-process-456",
-        "dataAddress": {
-            "@type": "DataAddress",
-            "endpointType": "HTTP",
-            "endpointProperties": [
-                {
-                    "@type": "EndpointProperty",
-                    "name": "baseUrl",
-                    "value": "https://provider.example.com/data"
-                }
-            ]
-        },
+        "participantId": "did:web:consumer.example.com",
+        "processId": "test-consumer-process-456",
         "agreementId": "test-agreement-789",
         "transferType": "http-pull",
         "dataspaceContext": "test-dataspace",
         "callbackAddress": "https://consumer.example.com/callback",
-        "messageId": "msg-001",
+        "messageId": "msg-prepare-001",
+        "counterPartyId": "did:web:provider.example.com",
+        "labels": [],
+        "metadata": {},
+    });
+
+    let prepare_response = client
+        .post(format!("{}/api/v1/dataflows/prepare", signaling_url))
+        .header("Content-Type", "application/json")
+        .header("X-Participant-Id", "test-participant-context")
+        .json(&prepare_message)
+        .send()
+        .await
+        .context("Failed to send prepare request")?;
+
+    assert!(
+        prepare_response.status().is_success(),
+        "Prepare request should succeed, got status: {}",
+        prepare_response.status()
+    );
+
+    let prepare_result: serde_json::Value = prepare_response
+        .json()
+        .await
+        .context("Failed to parse prepare response")?;
+
+    // Verify prepare response does NOT contain a meaningful dataAddress (it's a pull)
+    // The field might be present but should be null or empty
+    if let Some(data_address) = prepare_result.get("dataAddress") {
+        assert!(
+            data_address.is_null(),
+            "Prepare response should not contain a dataAddress for pull transfers, got: {}",
+            data_address
+        );
+    }
+
+    // Step 2: Provider calls start endpoint
+    let start_message = serde_json::json!({
+        "datasetId": "test-dataset-123",
+        "participantId": "did:web:provider.example.com",
+        "processId": "test-provider-process-456",
+        "agreementId": "test-agreement-789",
+        "transferType": "http-pull",
+        "dataspaceContext": "test-dataspace",
+        "callbackAddress": "https://provider.example.com/callback",
+        "messageId": "msg-start-001",
         "counterPartyId": "did:web:consumer.example.com",
         "labels": [],
         "metadata": {
@@ -127,7 +163,6 @@ async fn test_provider_signaling_operations() -> Result<()> {
         }
     });
 
-    // Call the start endpoint
     let start_response = client
         .post(format!("{}/api/v1/dataflows/start", signaling_url))
         .header("Content-Type", "application/json")
@@ -144,8 +179,6 @@ async fn test_provider_signaling_operations() -> Result<()> {
     );
 
     let start_result: serde_json::Value = start_response.json().await.context("Failed to parse start response")?;
-
-    // println!("Start response: {}", serde_json::to_string_pretty(&start_result)?);
 
     // Verify the response contains expected fields
     assert!(
@@ -172,6 +205,7 @@ async fn test_provider_signaling_operations() -> Result<()> {
         .iter()
         .any(|p| p.get("name").and_then(|n| n.as_str()) == Some("authorization"));
     assert!(has_auth, "Authorization property not found in data address");
+
     // Extract the JWT token for inspection
     let auth_prop = properties_array
         .iter()
@@ -179,7 +213,6 @@ async fn test_provider_signaling_operations() -> Result<()> {
         .unwrap();
 
     let token = auth_prop.get("value").and_then(|v| v.as_str()).unwrap();
-    // println!("Token: {}...", &token);
     assert!(!token.is_empty());
 
     // Decode and parse the JWT
@@ -200,8 +233,6 @@ async fn test_provider_signaling_operations() -> Result<()> {
     let jwt_payload: serde_json::Value =
         serde_json::from_str(&payload_str).context("Failed to parse JWT payload as JSON")?;
 
-    println!("JWT payload: {}", serde_json::to_string_pretty(&jwt_payload)?);
-
     // Verify the metadata claims are present in the JWT
     assert_eq!(
         jwt_payload.get("claim1").and_then(|v| v.as_str()),
@@ -219,22 +250,59 @@ async fn test_provider_signaling_operations() -> Result<()> {
         .iter()
         .any(|p| p.get("name").and_then(|n| n.as_str()) == Some("refreshToken"));
     assert!(has_refresh, "Refresh token not found in data address");
+
     // Check for refresh endpoint
     let has_endpoint = properties_array
         .iter()
         .any(|p| p.get("name").and_then(|n| n.as_str()) == Some("refreshEndpoint"));
     assert!(has_endpoint, "Refresh Endpoint not found in data address");
 
-    // Verify terminate
+    // Step 3: Consumer calls started endpoint with provider's data address
+    let started_message = serde_json::json!({
+        "participantId": "did:web:consumer.example.com",
+        "counterPartyId": "did:web:provider.example.com",
+        "dataAddress": data_address,
+        "messageId": "msg-started-001"
+    });
+
+    let consumer_flow_id = "test-consumer-process-456";
+
+    let started_response = client
+        .post(format!(
+            "{}/api/v1/dataflows/{}/started",
+            signaling_url, consumer_flow_id
+        ))
+        .header("Content-Type", "application/json")
+        .header("X-Participant-Id", "test-participant-context")
+        .json(&started_message)
+        .send()
+        .await
+        .context("Failed to send started request")?;
+
+    let status = started_response.status();
+    if !status.is_success() {
+        let error_body = started_response
+            .text()
+            .await
+            .unwrap_or_else(|_| "Unable to read error body".to_string());
+        panic!(
+            "Started request should succeed, got status: {}, body: {}",
+            status, error_body
+        );
+    }
+
+    // Step 4: Provider terminates the transfer
     let terminate_message = serde_json::json!({
         "reason": "Test termination"
     });
 
-    // Use the processId from the start message as the flow ID
-    let flow_id = "test-process-456";
+    let provider_flow_id = "test-provider-process-456";
 
     let terminate_response = client
-        .post(format!("{}/api/v1/dataflows/{}/terminate", signaling_url, flow_id))
+        .post(format!(
+            "{}/api/v1/dataflows/{}/terminate",
+            signaling_url, provider_flow_id
+        ))
         .header("Content-Type", "application/json")
         .header("X-Participant-Id", "test-participant-context")
         .json(&terminate_message)
@@ -247,6 +315,7 @@ async fn test_provider_signaling_operations() -> Result<()> {
         "Terminate should return 200 OK for successful termination, got: {}",
         terminate_response.status()
     );
+
     Ok(())
 }
 
@@ -335,6 +404,7 @@ async fn ensure_siglet_deployed() -> Result<Arc<SigletDeployment>> {
         .get_or_try_init(|| async {
             verify_e2e_setup().await?;
 
+            let config_manifest = "manifests/siglet-config.yaml";
             let deployment_manifest = "manifests/siglet-deployment.yaml";
             let service_manifest = "manifests/siglet-service.yaml";
 
@@ -343,16 +413,25 @@ async fn ensure_siglet_deployed() -> Result<Arc<SigletDeployment>> {
             // Clean up any existing deployment
             let _ = kubectl_delete(deployment_manifest);
             let _ = kubectl_delete(service_manifest);
+            let _ = kubectl_delete(config_manifest);
 
             // Wait for pods to actually be deleted instead of fixed sleep
-            wait_for_pods_deleted_by_label(E2E_NAMESPACE, "app=siglet", 30)
+            // Wait up to 60s — Kubernetes default graceful termination period is 30s,
+            // so waiting only 30s would race against a pod that just started terminating.
+            wait_for_pods_deleted_by_label(E2E_NAMESPACE, "app=siglet", 60)
                 .await
                 .context("Failed to wait for previous Siglet pods to be deleted")?;
 
             // Deploy Siglet (uses Vault Agent sidecar pattern)
+            // Tolerate AlreadyExists: a concurrent retry process may have deployed first
             println!("Deploying Siglet with Vault Agent sidecar");
-            kubectl_apply(deployment_manifest)?;
-            kubectl_apply(service_manifest)?;
+            for manifest in [config_manifest, deployment_manifest, service_manifest] {
+                if let Err(e) = kubectl_apply(manifest) {
+                    if !e.to_string().contains("AlreadyExists") {
+                        return Err(e);
+                    }
+                }
+            }
 
             // Wait for deployment to be ready
             println!("Waiting for Siglet to be ready");

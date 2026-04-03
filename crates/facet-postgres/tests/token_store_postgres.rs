@@ -66,6 +66,7 @@ async fn test_postgres_save_and_get_token() {
         refresh_token: "refresh_token_123".to_string(),
         expires_at,
         refresh_endpoint: "https://auth.example.com/refresh".to_string(),
+        endpoint: "https://example.com/data".to_string(),
     };
 
     let pc = &ParticipantContext::builder().id("participant1").build();
@@ -121,6 +122,7 @@ async fn test_postgres_save_token_upserts_on_duplicate() {
         refresh_token: "old_refresh".to_string(),
         expires_at: expires_at_1,
         refresh_endpoint: "https://old.example.com/refresh".to_string(),
+        endpoint: "https://example.com/data".to_string(),
     };
 
     let token_data2 = TokenData {
@@ -130,6 +132,7 @@ async fn test_postgres_save_token_upserts_on_duplicate() {
         refresh_token: "new_refresh".to_string(),
         expires_at: expires_at_2,
         refresh_endpoint: "https://new.example.com/refresh".to_string(),
+        endpoint: "https://example.com/data".to_string(),
     };
 
     // First save succeeds
@@ -168,6 +171,7 @@ async fn test_postgres_update_token_success() {
         refresh_token: "refresh1".to_string(),
         expires_at,
         refresh_endpoint: "https://example.com/refresh".to_string(),
+        endpoint: "https://example.com/data".to_string(),
     };
 
     store.save_token(token_data).await.unwrap();
@@ -180,6 +184,7 @@ async fn test_postgres_update_token_success() {
         refresh_token: "refresh_updated".to_string(),
         expires_at: new_expires_at,
         refresh_endpoint: "https://example.com/refresh".to_string(),
+        endpoint: "https://example.com/data".to_string(),
     };
 
     store.update_token(updated_data).await.unwrap();
@@ -212,6 +217,7 @@ async fn test_postgres_update_nonexistent_token() {
         refresh_token: "refresh".to_string(),
         expires_at,
         refresh_endpoint: "https://example.com/refresh".to_string(),
+        endpoint: "https://example.com/data".to_string(),
     };
 
     let result = store.update_token(token_data).await;
@@ -239,6 +245,7 @@ async fn test_postgres_remove_token_success() {
         refresh_token: "refresh1".to_string(),
         expires_at,
         refresh_endpoint: "https://example.com/refresh".to_string(),
+        endpoint: "https://example.com/data".to_string(),
     };
 
     store.save_token(token_data).await.unwrap();
@@ -289,6 +296,7 @@ async fn test_postgres_multiple_tokens() {
         refresh_token: "refresh1".to_string(),
         expires_at,
         refresh_endpoint: "https://example.com/refresh".to_string(),
+        endpoint: "https://example.com/data".to_string(),
     };
 
     let token2 = TokenData {
@@ -298,6 +306,7 @@ async fn test_postgres_multiple_tokens() {
         refresh_token: "refresh2".to_string(),
         expires_at,
         refresh_endpoint: "https://example.com/refresh".to_string(),
+        endpoint: "https://example.com/data".to_string(),
     };
 
     store.save_token(token1).await.unwrap();
@@ -332,6 +341,7 @@ async fn test_postgres_token_with_special_characters() {
         refresh_token: "refresh!@#$%^&*()".to_string(),
         expires_at,
         refresh_endpoint: "https://auth.example.com/token?param=value&other=123".to_string(),
+        endpoint: "https://example.com/data".to_string(),
     };
 
     let pc = &ParticipantContext::builder().id("participant1").build();
@@ -364,6 +374,7 @@ async fn test_postgres_token_with_long_values() {
         refresh_token: "r".repeat(2000),
         expires_at,
         refresh_endpoint: format!("https://example.com/{}", "path/".repeat(100)),
+        endpoint: "https://example.com/data".to_string(),
     };
 
     store.save_token(token_data).await.unwrap();
@@ -396,6 +407,7 @@ async fn test_postgres_save_get_update_remove_flow() {
         refresh_token: "refresh1".to_string(),
         expires_at,
         refresh_endpoint: "https://example.com/refresh".to_string(),
+        endpoint: "https://example.com/data".to_string(),
     };
 
     store.save_token(token_data).await.unwrap();
@@ -408,6 +420,7 @@ async fn test_postgres_save_get_update_remove_flow() {
         refresh_token: "refresh2".to_string(),
         expires_at: new_expires_at,
         refresh_endpoint: "https://example.com/refresh".to_string(),
+        endpoint: "https://example.com/data".to_string(),
     };
 
     store.update_token(updated_data).await.unwrap();
@@ -443,6 +456,7 @@ async fn test_postgres_last_accessed_timestamp_recorded() {
         refresh_token: "refresh1".to_string(),
         expires_at,
         refresh_endpoint: "https://example.com/refresh".to_string(),
+        endpoint: "https://example.com/data".to_string(),
     };
 
     store.save_token(token_data).await.unwrap();
@@ -478,6 +492,7 @@ async fn test_postgres_deterministic_timestamps() {
         refresh_token: "refresh1".to_string(),
         expires_at: initial_time + TimeDelta::seconds(3600),
         refresh_endpoint: "https://example.com/refresh".to_string(),
+        endpoint: "https://example.com/data".to_string(),
     };
 
     store.save_token(token1).await.unwrap();
@@ -492,6 +507,7 @@ async fn test_postgres_deterministic_timestamps() {
         refresh_token: "refresh2".to_string(),
         expires_at: initial_time + TimeDelta::seconds(7200),
         refresh_endpoint: "https://example.com/refresh".to_string(),
+        endpoint: "https://example.com/data".to_string(),
     };
 
     store.save_token(token2).await.unwrap();
@@ -526,6 +542,7 @@ async fn test_postgres_tokens_are_encrypted_at_rest() {
         refresh_token: "plaintext_refresh_token".to_string(),
         expires_at,
         refresh_endpoint: "https://auth.example.com/refresh".to_string(),
+        endpoint: "https://example.com/data".to_string(),
     };
 
     store.save_token(token_data.clone()).await.unwrap();
@@ -575,6 +592,7 @@ async fn test_context_isolation_save() {
         refresh_token: "refresh_p1".to_string(),
         expires_at,
         refresh_endpoint: "https://p1.example.com/refresh".to_string(),
+        endpoint: "https://example.com/data".to_string(),
     };
 
     let token_p2 = TokenData {
@@ -584,6 +602,7 @@ async fn test_context_isolation_save() {
         refresh_token: "refresh_p2".to_string(),
         expires_at,
         refresh_endpoint: "https://p2.example.com/refresh".to_string(),
+        endpoint: "https://example.com/data".to_string(),
     };
 
     store.save_token(token_p1).await.unwrap();
@@ -633,6 +652,7 @@ async fn test_context_isolation_get() {
         refresh_token: "refresh_p1".to_string(),
         expires_at,
         refresh_endpoint: "https://p1.example.com/refresh".to_string(),
+        endpoint: "https://example.com/data".to_string(),
     };
 
     let token_p2 = TokenData {
@@ -642,6 +662,7 @@ async fn test_context_isolation_get() {
         refresh_token: "refresh_p2".to_string(),
         expires_at,
         refresh_endpoint: "https://p2.example.com/refresh".to_string(),
+        endpoint: "https://example.com/data".to_string(),
     };
 
     store.save_token(token_p1).await.unwrap();
@@ -694,6 +715,7 @@ async fn test_context_isolation_update() {
         refresh_token: "refresh_p1".to_string(),
         expires_at,
         refresh_endpoint: "https://p1.example.com/refresh".to_string(),
+        endpoint: "https://example.com/data".to_string(),
     };
 
     let token_p2 = TokenData {
@@ -703,6 +725,7 @@ async fn test_context_isolation_update() {
         refresh_token: "refresh_p2".to_string(),
         expires_at,
         refresh_endpoint: "https://p2.example.com/refresh".to_string(),
+        endpoint: "https://example.com/data".to_string(),
     };
 
     store.save_token(token_p1).await.unwrap();
@@ -715,6 +738,7 @@ async fn test_context_isolation_update() {
         refresh_token: "refresh_p1_updated".to_string(),
         expires_at,
         refresh_endpoint: "https://p1.example.com/refresh".to_string(),
+        endpoint: "https://example.com/data".to_string(),
     };
 
     store.update_token(updated_p1).await.unwrap();
@@ -740,6 +764,7 @@ async fn test_context_isolation_update() {
         refresh_token: "refresh_p3".to_string(),
         expires_at,
         refresh_endpoint: "https://p3.example.com/refresh".to_string(),
+        endpoint: "https://example.com/data".to_string(),
     };
 
     let result_p3 = store.update_token(update_p3).await;
@@ -768,6 +793,7 @@ async fn test_context_isolation_remove() {
         refresh_token: "refresh_p1".to_string(),
         expires_at,
         refresh_endpoint: "https://p1.example.com/refresh".to_string(),
+        endpoint: "https://example.com/data".to_string(),
     };
 
     let token_p2 = TokenData {
@@ -777,6 +803,7 @@ async fn test_context_isolation_remove() {
         refresh_token: "refresh_p2".to_string(),
         expires_at,
         refresh_endpoint: "https://p2.example.com/refresh".to_string(),
+        endpoint: "https://example.com/data".to_string(),
     };
 
     store.save_token(token_p1).await.unwrap();
@@ -801,4 +828,83 @@ async fn test_context_isolation_remove() {
 
     // Verify p2's token still exists after p3 tries to remove a non-existent token
     assert_eq!(store.get_token(pc2, "provider").await.unwrap().token, "token_p2");
+}
+
+#[tokio::test]
+async fn test_postgres_endpoint_is_stored_and_retrieved() {
+    let (pool, _container) = setup_postgres_container().await;
+    let initial_time = Utc::now();
+    let clock = Arc::new(MockClock::new(initial_time));
+    let store = PostgresTokenStore::builder()
+        .pool(pool)
+        .clock(clock)
+        .encryption_key(TEST_KEY.clone())
+        .build();
+    store.initialize().await.unwrap();
+
+    let expires_at = initial_time + TimeDelta::seconds(3600);
+    let token_data = TokenData {
+        participant_context: "participant1".to_string(),
+        identifier: "provider1".to_string(),
+        token: "access_token_abc".to_string(),
+        refresh_token: "refresh_token_abc".to_string(),
+        expires_at,
+        refresh_endpoint: "https://auth.example.com/refresh".to_string(),
+        endpoint: "https://provider.example.com/data/asset-1".to_string(),
+    };
+
+    let pc = &ParticipantContext::builder().id("participant1").build();
+
+    store.save_token(token_data).await.unwrap();
+    let retrieved = store.get_token(pc, "provider1").await.unwrap();
+
+    assert_eq!(retrieved.endpoint, "https://provider.example.com/data/asset-1");
+}
+
+#[tokio::test]
+async fn test_postgres_update_token_preserves_endpoint() {
+    let (pool, _container) = setup_postgres_container().await;
+    let initial_time = Utc::now();
+    let clock = Arc::new(MockClock::new(initial_time));
+    let store = PostgresTokenStore::builder()
+        .pool(pool)
+        .clock(clock)
+        .encryption_key(TEST_KEY.clone())
+        .build();
+    store.initialize().await.unwrap();
+
+    let expires_at = initial_time + TimeDelta::seconds(3600);
+    let token_data = TokenData {
+        participant_context: "participant1".to_string(),
+        identifier: "provider1".to_string(),
+        token: "original_token".to_string(),
+        refresh_token: "original_refresh".to_string(),
+        expires_at,
+        refresh_endpoint: "https://auth.example.com/refresh".to_string(),
+        endpoint: "https://provider.example.com/data/original".to_string(),
+    };
+
+    store.save_token(token_data).await.unwrap();
+
+    let new_expires_at = initial_time + TimeDelta::seconds(7200);
+    let updated_data = TokenData {
+        participant_context: "participant1".to_string(),
+        identifier: "provider1".to_string(),
+        token: "updated_token".to_string(),
+        refresh_token: "updated_refresh".to_string(),
+        expires_at: new_expires_at,
+        refresh_endpoint: "https://auth.example.com/refresh".to_string(),
+        endpoint: "https://ignored.example.com".to_string(),
+    };
+
+    store.update_token(updated_data).await.unwrap();
+
+    let pc = &ParticipantContext::builder().id("participant1").build();
+
+    let retrieved = store.get_token(pc, "provider1").await.unwrap();
+
+    // endpoint should be unchanged from the original save
+    assert_eq!(retrieved.endpoint, "https://provider.example.com/data/original");
+    // token should reflect the updated value
+    assert_eq!(retrieved.token, "updated_token");
 }

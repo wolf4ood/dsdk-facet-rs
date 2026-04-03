@@ -81,4 +81,6 @@ async fn test_refresh_token_success() {
     assert_eq!(token_data.token, "new_access_token");
     assert_eq!(token_data.refresh_token, "new_refresh_token");
     assert_eq!(token_data.refresh_endpoint, refresh_endpoint);
+    // endpoint is not populated by OAuth refresh — it is preserved from the original save
+    assert_eq!(token_data.endpoint, "");
 }

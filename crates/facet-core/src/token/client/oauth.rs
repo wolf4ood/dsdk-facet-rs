@@ -106,6 +106,8 @@ impl TokenClient for OAuth2TokenClient {
             refresh_token: new_refresh_token,
             expires_at,
             refresh_endpoint: refresh_endpoint.to_string(),
+            // endpoint is immutable — update_token does not use this field
+            endpoint: String::new(),
         })
     }
 }

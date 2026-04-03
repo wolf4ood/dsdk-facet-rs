@@ -67,6 +67,7 @@ struct TokenRecord {
     token: String,
     refresh_token: String,
     refresh_endpoint: String,
+    endpoint: String,
     expires_at: DateTime<Utc>,
     last_accessed: DateTime<Utc>,
 }
@@ -96,6 +97,7 @@ impl TokenStore for MemoryTokenStore {
             refresh_token: record.refresh_token.clone(),
             expires_at: record.expires_at,
             refresh_endpoint: record.refresh_endpoint.clone(),
+            endpoint: record.endpoint.clone(),
         };
 
         // Update last_accessed after cloning the data
@@ -114,6 +116,7 @@ impl TokenStore for MemoryTokenStore {
             expires_at: data.expires_at,
             refresh_token: data.refresh_token,
             refresh_endpoint: data.refresh_endpoint,
+            endpoint: data.endpoint,
             last_accessed: self.clock.now(),
         };
 
@@ -136,6 +139,7 @@ impl TokenStore for MemoryTokenStore {
             record.refresh_token = data.refresh_token.clone();
             record.expires_at = data.expires_at;
             record.refresh_endpoint = data.refresh_endpoint;
+            // endpoint is immutable after creation — not updated on token refresh
             record.last_accessed = now;
         });
 

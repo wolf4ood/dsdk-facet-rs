@@ -101,6 +101,7 @@ async fn test_api_end_to_end_with_refresh() {
         refresh_token: "old_refresh_token".to_string(),
         expires_at: Utc::now() - TimeDelta::hours(10),
         refresh_endpoint,
+        endpoint: "https://provider.example.com/data/asset-1".to_string(),
     };
     token_store.save_token(data).await.unwrap();
 
@@ -118,7 +119,9 @@ async fn test_api_end_to_end_with_refresh() {
 
     let result = token_api.get_token(pc1, "token1", "participant1").await;
     assert!(result.is_ok());
-    assert_eq!(result.unwrap(), "new_access_token");
+    let token_result = result.unwrap();
+    assert_eq!(token_result.token, "new_access_token");
+    assert_eq!(token_result.endpoint, "https://provider.example.com/data/asset-1");
 
     // Test delete_token
     let delete_result = token_api.delete_token("participant1", "token1", "participant1").await;

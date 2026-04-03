@@ -29,6 +29,7 @@ use dsdk_facet_core::token::client::{MemoryTokenStore, TokenStore};
 use dsdk_facet_core::token::manager::{JwtTokenManager, MemoryRenewableTokenStore};
 use dsdk_facet_core::util::clock::{Clock, MockClock};
 use serde_json::Value;
+use siglet::config::{EndpointMapping, TokenSource, TransferType};
 use siglet::handler::{
     CLAIM_AGREEMENT_ID, CLAIM_COUNTER_PARTY_ID, CLAIM_DATASET_ID, CLAIM_PARTICIPANT_ID, SigletDataFlowHandler,
 };
@@ -36,13 +37,14 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 #[tokio::test]
-async fn test_on_start_token_created() {
+async fn test_on_start_creates_token() {
     let token_store = Arc::new(MemoryTokenStore::new());
     let token_manager = create_jwt_token_manager();
     let handler = SigletDataFlowHandler::builder()
         .token_store(token_store)
         .token_manager(token_manager)
         .dataplane_id("test-dataplane")
+        .transfer_type_mappings(http_pull_mappings())
         .build();
 
     let flow = create_test_flow("flow-1", "participant-1", "http-pull");
@@ -74,8 +76,7 @@ async fn test_on_start_token_created() {
         .decode(token_parts[1])
         .expect("Failed to decode JWT payload");
     let payload_str = String::from_utf8(payload_bytes).expect("Failed to convert payload to string");
-    let jwt_payload: serde_json::Value =
-        serde_json::from_str(&payload_str).expect("Failed to parse JWT payload as JSON");
+    let jwt_payload: Value = serde_json::from_str(&payload_str).expect("Failed to parse JWT payload as JSON");
 
     // Verify the metadata claims are present in the JWT
     assert_eq!(
@@ -123,6 +124,7 @@ async fn test_on_suspend_succeeds() {
         .token_store(token_store)
         .token_manager(token_manager)
         .dataplane_id("test-dataplane")
+        .transfer_type_mappings(http_pull_mappings())
         .build();
 
     let flow = create_test_flow("flow-1", "participant-1", "http-pull");
@@ -145,19 +147,21 @@ async fn test_on_started_saves_token_to_store() {
         .token_store(token_store.clone())
         .token_manager(token_manager)
         .dataplane_id("test-dataplane")
+        .transfer_type_mappings(http_pull_mappings())
         .build();
     let expires_at = Utc::now() + TimeDelta::hours(1);
-    let expires_at_str = expires_at.to_rfc3339();
 
+    let expires_in_seconds = (expires_at.timestamp() - Utc::now().timestamp()).to_string();
+
+    let data_endpoint = "https://example.com/data";
     let data_address = DataAddress::builder()
         .endpoint_type("HttpData")
         .endpoint_properties(vec![
-            create_endpoint_property("endpoint", "https://example.com/data"),
-            create_endpoint_property("access_token", "token-id-123"),
-            create_endpoint_property("token", "access-token-value"),
-            create_endpoint_property("refresh_token", "refresh-token-value"),
-            create_endpoint_property("refresh_endpoint", "https://example.com/refresh"),
-            create_endpoint_property("expires_at", &expires_at_str),
+            create_endpoint_property("endpoint", data_endpoint),
+            create_endpoint_property("authorization", "access-token-value"),
+            create_endpoint_property("refreshToken", "refresh-token-value"),
+            create_endpoint_property("refreshEndpoint", "https://example.com/refresh"),
+            create_endpoint_property("expiresIn", &expires_in_seconds),
         ])
         .build();
 
@@ -169,17 +173,79 @@ async fn test_on_started_saves_token_to_store() {
     let result = handler.on_started(&mut tx, &flow).await;
     assert!(result.is_ok());
 
-    // Verify token was saved to the store
-    let participant_ctx = ParticipantContext::builder().id("participant-1").build();
+    // Verify token was saved under participant_context_id ("context-1"), not participant_id
+    let participant_ctx = ParticipantContext::builder().id("context-1").build();
     let saved_token = token_store.get_token(&participant_ctx, "flow-1").await;
     assert!(saved_token.is_ok());
 
     let token_data = saved_token.unwrap();
     assert_eq!(token_data.identifier, "flow-1");
-    assert_eq!(token_data.participant_context, "participant-1");
+    assert_eq!(token_data.participant_context, "context-1");
     assert_eq!(token_data.token, "access-token-value");
     assert_eq!(token_data.refresh_token, "refresh-token-value");
     assert_eq!(token_data.refresh_endpoint, "https://example.com/refresh");
+    assert_eq!(token_data.endpoint, data_endpoint);
+}
+
+/// Verifies that on_started keys the saved token on participant_context_id, not participant_id.
+///
+/// These two fields have distinct meanings: participant_id is the DID/identity of the participant
+/// (e.g. "did:web:consumer.example.com") while participant_context_id is the local tenant key
+/// used for store isolation (e.g. "ctx-abc123"). Using participant_id as the store key would cause
+/// every subsequent get_token lookup (which uses participant_context_id) to miss.
+#[tokio::test]
+async fn test_on_started_stores_token_under_participant_context_id() {
+    let token_store = Arc::new(MemoryTokenStore::new());
+    let token_manager = create_jwt_token_manager();
+    let handler = SigletDataFlowHandler::builder()
+        .token_store(token_store.clone())
+        .token_manager(token_manager)
+        .dataplane_id("test-dataplane")
+        .transfer_type_mappings(http_pull_mappings())
+        .build();
+
+    let expires_at = Utc::now() + TimeDelta::hours(1);
+    let expires_in_seconds = (expires_at.timestamp() - Utc::now().timestamp()).to_string();
+
+    let data_address = DataAddress::builder()
+        .endpoint_type("HttpData")
+        .endpoint_properties(vec![
+            create_endpoint_property("endpoint", "https://example.com/data"),
+            create_endpoint_property("authorization", "token-value"),
+            create_endpoint_property("refreshToken", "refresh-value"),
+            create_endpoint_property("refreshEndpoint", "https://example.com/refresh"),
+            create_endpoint_property("expiresIn", &expires_in_seconds),
+        ])
+        .build();
+
+    // Use clearly distinct values so any mix-up is immediately visible
+    let flow = DataFlow::builder()
+        .id("flow-distinct")
+        .participant_id("did:web:consumer.example.com") // identity DID — NOT the store key
+        .participant_context_id("ctx-abc123") // local context — IS the store key
+        .transfer_type("http-pull")
+        .agreement_id("agreement-1")
+        .dataset_id("dataset-1")
+        .dataspace_context("dataspace-1")
+        .counter_party_id("did:web:provider.example.com")
+        .callback_address("https://example.com/callback")
+        .data_address(data_address)
+        .build();
+
+    let context = MemoryContext;
+    let mut tx = context.begin().await.unwrap();
+    handler.on_started(&mut tx, &flow).await.unwrap();
+
+    // Must be retrievable via participant_context_id
+    let ctx_by_context_id = ParticipantContext::builder().id("ctx-abc123").build();
+    let saved = token_store.get_token(&ctx_by_context_id, "flow-distinct").await;
+    assert!(saved.is_ok(), "token should be found under participant_context_id");
+    assert_eq!(saved.unwrap().participant_context, "ctx-abc123");
+
+    // Must NOT be retrievable via participant_id
+    let ctx_by_participant_id = ParticipantContext::builder().id("did:web:consumer.example.com").build();
+    let missing = token_store.get_token(&ctx_by_participant_id, "flow-distinct").await;
+    assert!(missing.is_err(), "token must not be stored under participant_id");
 }
 
 #[tokio::test]
@@ -190,6 +256,7 @@ async fn test_on_started_without_data_address_succeeds() {
         .token_store(token_store)
         .token_manager(token_manager)
         .dataplane_id("test-dataplane")
+        .transfer_type_mappings(http_pull_mappings())
         .build();
 
     let flow = create_test_flow("flow-1", "participant-1", "http-pull");
@@ -202,18 +269,19 @@ async fn test_on_started_without_data_address_succeeds() {
 }
 
 #[tokio::test]
-async fn test_on_started_with_missing_endpoint_fails() {
+async fn test_on_started_missing_endpoint_errors() {
     let token_store = Arc::new(MemoryTokenStore::new());
     let token_manager = create_jwt_token_manager();
     let handler = SigletDataFlowHandler::builder()
         .token_store(token_store)
         .token_manager(token_manager)
         .dataplane_id("test-dataplane")
+        .transfer_type_mappings(http_pull_mappings())
         .build();
 
     let data_address = DataAddress::builder()
         .endpoint_type("HttpData")
-        .endpoint_properties(vec![create_endpoint_property("access_token", "token-id-123")])
+        .endpoint_properties(vec![])
         .build();
 
     let flow = create_test_flow_with_data_address("flow-1", "participant-1", "http-pull", data_address);
@@ -227,13 +295,14 @@ async fn test_on_started_with_missing_endpoint_fails() {
 }
 
 #[tokio::test]
-async fn test_on_started_with_missing_access_token_fails() {
+async fn test_on_started_missing_token_errors() {
     let token_store = Arc::new(MemoryTokenStore::new());
     let token_manager = create_jwt_token_manager();
     let handler = SigletDataFlowHandler::builder()
         .token_store(token_store)
         .token_manager(token_manager)
         .dataplane_id("test-dataplane")
+        .transfer_type_mappings(http_pull_mappings())
         .build();
 
     let data_address = DataAddress::builder()
@@ -248,35 +317,325 @@ async fn test_on_started_with_missing_access_token_fails() {
 
     let result = handler.on_started(&mut tx, &flow).await;
     assert!(result.is_err());
-    assert!(result.unwrap_err().to_string().contains("access_token"));
+    assert!(result.unwrap_err().to_string().contains("authorization"));
 }
 
+/// Verifies that a metadata value of JSON null produces an empty-string claim in the JWT.
+///
+/// value_to_claim_string maps JSON null → "". This test pins that behavior at the callsite,
+/// so it is visible to anyone reading the claim-generation path, not just the private helper.
 #[tokio::test]
-async fn test_on_started_with_missing_token_fails() {
+async fn test_on_start_metadata_null_produces_empty_claim() {
+    let mut metadata = HashMap::new();
+    metadata.insert("nullable_field".to_string(), Value::Null);
+
+    let flow = DataFlow::builder()
+        .id("flow-null")
+        .participant_id("participant-1")
+        .transfer_type("http-pull")
+        .agreement_id("agreement-1")
+        .dataset_id("dataset-1")
+        .dataspace_context("dataspace-1")
+        .counter_party_id("counter-party-1")
+        .callback_address("https://example.com/callback")
+        .participant_context_id("context-1")
+        .metadata(metadata)
+        .build();
+
     let token_store = Arc::new(MemoryTokenStore::new());
     let token_manager = create_jwt_token_manager();
     let handler = SigletDataFlowHandler::builder()
         .token_store(token_store)
         .token_manager(token_manager)
         .dataplane_id("test-dataplane")
+        .transfer_type_mappings(http_pull_mappings())
         .build();
-
-    let data_address = DataAddress::builder()
-        .endpoint_type("HttpData")
-        .endpoint_properties(vec![
-            create_endpoint_property("endpoint", "https://example.com/data"),
-            create_endpoint_property("access_token", "token-id-123"),
-        ])
-        .build();
-
-    let flow = create_test_flow_with_data_address("flow-1", "participant-1", "http-pull", data_address);
 
     let context = MemoryContext;
     let mut tx = context.begin().await.unwrap();
+    let response = handler.on_start(&mut tx, &flow).await.unwrap();
 
-    let result = handler.on_started(&mut tx, &flow).await;
-    assert!(result.is_err());
-    assert!(result.unwrap_err().to_string().contains("token"));
+    let jwt_payload = decode_jwt_payload(&response);
+    assert_eq!(
+        jwt_payload.get("nullable_field").and_then(|v| v.as_str()),
+        Some(""),
+        "JSON null metadata value should produce an empty-string claim"
+    );
+}
+
+/// Verifies that a JSON-encoded string in metadata is unwrapped to its inner value in the JWT.
+///
+/// value_to_claim_string unwraps double-encoded strings: `"\"hello\""` → `hello`.
+/// This test pins that behavior at the callsite, so the transformation is visible
+/// when reading the claim-generation path.
+#[tokio::test]
+async fn test_on_start_json_encoded_metadata_unwrapped_in_claim() {
+    let mut metadata = HashMap::new();
+    // Simulates a provider that JSON-encodes string values before putting them in metadata
+    metadata.insert(
+        "encoded_field".to_string(),
+        Value::String("\"inner-value\"".to_string()),
+    );
+
+    let flow = DataFlow::builder()
+        .id("flow-encoded")
+        .participant_id("participant-1")
+        .transfer_type("http-pull")
+        .agreement_id("agreement-1")
+        .dataset_id("dataset-1")
+        .dataspace_context("dataspace-1")
+        .counter_party_id("counter-party-1")
+        .callback_address("https://example.com/callback")
+        .participant_context_id("context-1")
+        .metadata(metadata)
+        .build();
+
+    let token_store = Arc::new(MemoryTokenStore::new());
+    let token_manager = create_jwt_token_manager();
+    let handler = SigletDataFlowHandler::builder()
+        .token_store(token_store)
+        .token_manager(token_manager)
+        .dataplane_id("test-dataplane")
+        .transfer_type_mappings(http_pull_mappings())
+        .build();
+
+    let context = MemoryContext;
+    let mut tx = context.begin().await.unwrap();
+    let response = handler.on_start(&mut tx, &flow).await.unwrap();
+
+    let jwt_payload = decode_jwt_payload(&response);
+    assert_eq!(
+        jwt_payload.get("encoded_field").and_then(|v| v.as_str()),
+        Some("inner-value"),
+        "JSON-encoded string metadata value should be unwrapped in the claim"
+    );
+}
+
+// ============================================================================
+// Endpoint Mapping Tests
+// ============================================================================
+
+#[tokio::test]
+async fn test_on_start_endpoint_mapping_resolves_by_metadata() {
+    let handler = SigletDataFlowHandler::builder()
+        .token_store(Arc::new(MemoryTokenStore::new()))
+        .token_manager(create_jwt_token_manager())
+        .dataplane_id("test-dataplane")
+        .transfer_type_mappings(s3_pull_mappings_with_endpoints())
+        .build();
+
+    let mut metadata = HashMap::new();
+    metadata.insert("app".to_string(), Value::String("app1".to_string()));
+
+    let flow = DataFlow::builder()
+        .id("flow-1")
+        .participant_id("participant-1")
+        .transfer_type("s3-pull")
+        .agreement_id("agreement-1")
+        .dataset_id("dataset-1")
+        .dataspace_context("dataspace-1")
+        .counter_party_id("counter-party-1")
+        .callback_address("https://example.com/callback")
+        .participant_context_id("context-1")
+        .metadata(metadata)
+        .build();
+
+    let context = MemoryContext;
+    let mut tx = context.begin().await.unwrap();
+    let response = handler.on_start(&mut tx, &flow).await.unwrap();
+
+    let data_address = response.data_address.expect("Data address should be present");
+    let endpoint = data_address
+        .get_property("endpoint")
+        .expect("endpoint property should be present");
+    assert_eq!(endpoint, "https://s3.eu-west-1.amazonaws.com/climate-bucket");
+}
+
+#[tokio::test]
+async fn test_on_start_endpoint_mapping_selects_correct_entry() {
+    let handler = SigletDataFlowHandler::builder()
+        .token_store(Arc::new(MemoryTokenStore::new()))
+        .token_manager(create_jwt_token_manager())
+        .dataplane_id("test-dataplane")
+        .transfer_type_mappings(s3_pull_mappings_with_endpoints())
+        .build();
+
+    let mut metadata = HashMap::new();
+    metadata.insert("app".to_string(), Value::String("app2".to_string()));
+
+    let flow = DataFlow::builder()
+        .id("flow-2")
+        .participant_id("participant-1")
+        .transfer_type("s3-pull")
+        .agreement_id("agreement-1")
+        .dataset_id("dataset-1")
+        .dataspace_context("dataspace-1")
+        .counter_party_id("counter-party-1")
+        .callback_address("https://example.com/callback")
+        .participant_context_id("context-1")
+        .metadata(metadata)
+        .build();
+
+    let context = MemoryContext;
+    let mut tx = context.begin().await.unwrap();
+    let response = handler.on_start(&mut tx, &flow).await.unwrap();
+
+    let data_address = response.data_address.expect("Data address should be present");
+    let endpoint = data_address
+        .get_property("endpoint")
+        .expect("endpoint property should be present");
+    assert_eq!(endpoint, "https://s3.us-east-1.amazonaws.com/finance-bucket");
+}
+
+#[tokio::test]
+async fn test_on_start_endpoint_mapping_errors_on_no_match() {
+    let handler = SigletDataFlowHandler::builder()
+        .token_store(Arc::new(MemoryTokenStore::new()))
+        .token_manager(create_jwt_token_manager())
+        .dataplane_id("test-dataplane")
+        .transfer_type_mappings(s3_pull_mappings_with_endpoints())
+        .build();
+
+    // metadata key present but value does not match any configured mapping
+    let mut metadata = HashMap::new();
+    metadata.insert("app".to_string(), Value::String("app-unknown".to_string()));
+
+    let flow = DataFlow::builder()
+        .id("flow-3")
+        .participant_id("participant-1")
+        .transfer_type("s3-pull")
+        .agreement_id("agreement-1")
+        .dataset_id("dataset-1")
+        .dataspace_context("dataspace-1")
+        .counter_party_id("counter-party-1")
+        .callback_address("https://example.com/callback")
+        .participant_context_id("context-1")
+        .metadata(metadata)
+        .build();
+
+    let context = MemoryContext;
+    let mut tx = context.begin().await.unwrap();
+    let result = handler.on_start(&mut tx, &flow).await;
+
+    assert!(result.is_err(), "should error when no mapping matches");
+}
+
+#[tokio::test]
+async fn test_on_start_endpoint_mapping_errors_on_missing_key() {
+    let handler = SigletDataFlowHandler::builder()
+        .token_store(Arc::new(MemoryTokenStore::new()))
+        .token_manager(create_jwt_token_manager())
+        .dataplane_id("test-dataplane")
+        .transfer_type_mappings(s3_pull_mappings_with_endpoints())
+        .build();
+
+    // metadata does not contain the key the mappings look for at all
+    let flow = DataFlow::builder()
+        .id("flow-no-meta")
+        .participant_id("participant-1")
+        .transfer_type("s3-pull")
+        .agreement_id("agreement-1")
+        .dataset_id("dataset-1")
+        .dataspace_context("dataspace-1")
+        .counter_party_id("counter-party-1")
+        .callback_address("https://example.com/callback")
+        .participant_context_id("context-1")
+        .build();
+
+    let context = MemoryContext;
+    let mut tx = context.begin().await.unwrap();
+    let result = handler.on_start(&mut tx, &flow).await;
+
+    assert!(result.is_err(), "should error when metadata key is absent");
+}
+
+#[tokio::test]
+async fn test_on_start_endpoint_mapping_arbitrary_metadata_key() {
+    // Endpoint mappings can use any metadata key, not just well-known fields
+    let mut transfer_type_mappings = HashMap::new();
+    transfer_type_mappings.insert(
+        "s3-pull".to_string(),
+        TransferType::builder()
+            .transfer_type("s3-pull".to_string())
+            .endpoint_type("AmazonS3".to_string())
+            .token_source(TokenSource::Provider)
+            .endpoint_mappings(vec![
+                EndpointMapping::builder()
+                    .key("customBucketId".to_string())
+                    .value("bucket-xyz".to_string())
+                    .endpoint("https://s3.example.com/xyz-bucket".to_string())
+                    .build(),
+            ])
+            .build(),
+    );
+
+    let handler = SigletDataFlowHandler::builder()
+        .token_store(Arc::new(MemoryTokenStore::new()))
+        .token_manager(create_jwt_token_manager())
+        .dataplane_id("test-dataplane")
+        .transfer_type_mappings(transfer_type_mappings)
+        .build();
+
+    let mut metadata = HashMap::new();
+    metadata.insert("customBucketId".to_string(), Value::String("bucket-xyz".to_string()));
+
+    let flow = DataFlow::builder()
+        .id("flow-custom")
+        .participant_id("participant-1")
+        .transfer_type("s3-pull")
+        .agreement_id("agreement-1")
+        .dataset_id("dataset-1")
+        .dataspace_context("dataspace-1")
+        .counter_party_id("counter-party-1")
+        .callback_address("https://example.com/callback")
+        .participant_context_id("context-1")
+        .metadata(metadata)
+        .build();
+
+    let context = MemoryContext;
+    let mut tx = context.begin().await.unwrap();
+    let response = handler.on_start(&mut tx, &flow).await.unwrap();
+
+    let data_address = response.data_address.expect("Data address should be present");
+    let endpoint = data_address
+        .get_property("endpoint")
+        .expect("endpoint property should be present");
+    assert_eq!(endpoint, "https://s3.example.com/xyz-bucket");
+}
+
+#[tokio::test]
+async fn test_on_start_static_endpoint_when_no_mappings() {
+    // Sanity check: existing static-endpoint behavior is unchanged when no mappings are configured
+    let handler = SigletDataFlowHandler::builder()
+        .token_store(Arc::new(MemoryTokenStore::new()))
+        .token_manager(create_jwt_token_manager())
+        .dataplane_id("test-dataplane")
+        .transfer_type_mappings(http_pull_mappings())
+        .build();
+
+    let flow = create_test_flow("flow-static", "participant-1", "http-pull");
+
+    let context = MemoryContext;
+    let mut tx = context.begin().await.unwrap();
+    let response = handler.on_start(&mut tx, &flow).await.unwrap();
+
+    let data_address = response.data_address.expect("Data address should be present");
+    let endpoint = data_address
+        .get_property("endpoint")
+        .expect("endpoint property should be present");
+    assert_eq!(endpoint, "https://pull.example.com");
+}
+
+/// Decodes the JWT payload from the authorization property of a DataFlowResponseMessage.
+fn decode_jwt_payload(response: &dataplane_sdk::core::model::messages::DataFlowResponseMessage) -> Value {
+    let data_address = response.data_address.as_ref().expect("Data address should be present");
+    let token = data_address
+        .get_property("authorization")
+        .expect("Authorization token should be present");
+    let parts: Vec<&str> = token.split('.').collect();
+    assert_eq!(parts.len(), 3, "JWT should have 3 parts");
+    let payload_bytes = URL_SAFE_NO_PAD.decode(parts[1]).expect("Failed to decode JWT payload");
+    serde_json::from_slice(&payload_bytes).expect("Failed to parse JWT payload")
 }
 
 /// Helper to create a JwtTokenManager with real JWT generator/verifier for testing
@@ -378,4 +737,45 @@ fn create_test_flow_with_data_address(
         .participant_context_id("context-1")
         .data_address(data_address)
         .build()
+}
+
+/// Helper to build transfer type mappings for http-pull tests
+fn http_pull_mappings() -> HashMap<String, TransferType> {
+    let mut mappings = HashMap::new();
+    mappings.insert(
+        "http-pull".to_string(),
+        TransferType::builder()
+            .transfer_type("http-pull".to_string())
+            .endpoint_type("HTTP".to_string())
+            .endpoint("https://pull.example.com".to_string())
+            .token_source(TokenSource::Provider)
+            .build(),
+    );
+    mappings
+}
+
+/// Helper to build s3-pull transfer type mappings keyed by a metadata field
+fn s3_pull_mappings_with_endpoints() -> HashMap<String, TransferType> {
+    let mut mappings = HashMap::new();
+    mappings.insert(
+        "s3-pull".to_string(),
+        TransferType::builder()
+            .transfer_type("s3-pull".to_string())
+            .endpoint_type("AmazonS3".to_string())
+            .token_source(TokenSource::Provider)
+            .endpoint_mappings(vec![
+                EndpointMapping::builder()
+                    .key("app".to_string())
+                    .value("app1".to_string())
+                    .endpoint("https://s3.eu-west-1.amazonaws.com/climate-bucket".to_string())
+                    .build(),
+                EndpointMapping::builder()
+                    .key("app".to_string())
+                    .value("app2".to_string())
+                    .endpoint("https://s3.us-east-1.amazonaws.com/finance-bucket".to_string())
+                    .build(),
+            ])
+            .build(),
+    );
+    mappings
 }

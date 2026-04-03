@@ -26,10 +26,23 @@ spec:
           items:
           - key: vault-agent-config.hcl
             path: vault-agent-config.hcl
+      - name: siglet-config
+        configMap:
+          name: siglet-config
       containers:
       - name: siglet
         image: siglet:local
         imagePullPolicy: Never
+        command:
+        - 'sh'
+        - '-c'
+        - |
+          echo "Waiting for Vault token..."
+          while [ ! -f /vault/secrets/.vault-token ]; do
+            sleep 1
+          done
+          echo "Vault token available, starting Siglet..."
+          exec /usr/local/bin/siglet
         ports:
         - name: http
           containerPort: 8080
@@ -44,6 +57,8 @@ spec:
           value: "8080"
         - name: SIGLET_SIGNALING_PORT
           value: "8081"
+        - name: SIGLET_CONFIG_FILE
+          value: "/config/siglet.toml"
         - name: SIGLET_VAULT_URL
           value: "http://vault:8200"
         - name: SIGLET_VAULT_TOKEN_FILE
@@ -55,6 +70,9 @@ spec:
         - name: SIGLET_TOKEN_REFRESH_ENDPOINT
           value: "http://siglet:8080/token/refresh"
         volumeMounts:
+        - name: siglet-config
+          mountPath: /config
+          readOnly: true
         - name: vault-secrets
           mountPath: /vault/secrets
           readOnly: true

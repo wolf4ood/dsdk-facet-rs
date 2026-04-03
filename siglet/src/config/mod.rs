@@ -57,21 +57,31 @@ pub enum StorageBackend {
     Postgres,
 }
 
-#[derive(Deserialize, Clone, Debug)]
+#[derive(Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum TokenSource {
     Client,
     Provider,
-    None,
 }
 
 #[derive(Builder, Deserialize, Clone, Debug)]
-pub struct TransferTypes {
+pub struct TransferType {
     pub transfer_type: String,
     pub endpoint_type: String,
-
-    #[builder(default = TokenSource::None)]
+    pub endpoint: Option<String>,
     pub token_source: TokenSource,
+    #[serde(default)]
+    #[builder(default)]
+    pub endpoint_mappings: Vec<EndpointMapping>,
+}
+
+#[derive(Builder, Deserialize, Clone, Debug)]
+pub struct EndpointMapping {
+    /// A key in `DataFlow.metadata` to match on.
+    pub key: String,
+    /// The expected string value of the metadata entry identified by `key`.
+    pub value: String,
+    pub endpoint: String,
 }
 
 #[derive(Deserialize, Clone, Debug)]
@@ -86,7 +96,7 @@ pub struct SigletConfig {
     #[serde(default)]
     pub storage_backend: StorageBackend,
     #[serde(default)]
-    pub transfer_types: Vec<TransferTypes>,
+    pub transfer_types: Vec<TransferType>,
 
     // Vault configuration
     pub vault_url: Option<String>,
@@ -188,6 +198,42 @@ impl SigletConfig {
             }
             if tt.endpoint_type.is_empty() {
                 errors.push(format!("transfer_types[{}]: endpoint_type cannot be empty", idx));
+            }
+
+            if tt.endpoint_mappings.is_empty() {
+                // No mappings: static endpoint is required
+                match &tt.endpoint {
+                    None => errors.push(format!(
+                        "transfer_types[{}]: endpoint is required when no endpoint_mappings are configured",
+                        idx
+                    )),
+                    Some(e) if e.is_empty() => {
+                        errors.push(format!("transfer_types[{}]: endpoint cannot be empty", idx))
+                    }
+                    _ => {}
+                }
+            } else {
+                // Validate each mapping entry
+                for (midx, mapping) in tt.endpoint_mappings.iter().enumerate() {
+                    if mapping.key.is_empty() {
+                        errors.push(format!(
+                            "transfer_types[{}].endpoint_mappings[{}]: key cannot be empty",
+                            idx, midx
+                        ));
+                    }
+                    if mapping.value.is_empty() {
+                        errors.push(format!(
+                            "transfer_types[{}].endpoint_mappings[{}]: value cannot be empty",
+                            idx, midx
+                        ));
+                    }
+                    if mapping.endpoint.is_empty() {
+                        errors.push(format!(
+                            "transfer_types[{}].endpoint_mappings[{}]: endpoint cannot be empty",
+                            idx, midx
+                        ));
+                    }
+                }
             }
         }
 

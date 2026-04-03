@@ -95,6 +95,7 @@ impl PostgresTokenStore {
                 refresh_token_nonce BYTEA NOT NULL,
                 expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
                 refresh_endpoint VARCHAR(2048) NOT NULL,
+                endpoint VARCHAR(2048) NOT NULL DEFAULT '',
                 last_accessed TIMESTAMP WITH TIME ZONE NOT NULL,
                 PRIMARY KEY (participant_context, identifier)
             )",
@@ -134,7 +135,7 @@ impl TokenStore for PostgresTokenStore {
             .map_err(|e| TokenError::database_error(format!("Failed to begin transaction: {}", e)))?;
 
         let record: TokenRecord = sqlx::query_as(
-            "SELECT participant_context, identifier, token, token_nonce, refresh_token, refresh_token_nonce, expires_at, refresh_endpoint
+            "SELECT participant_context, identifier, token, token_nonce, refresh_token, refresh_token_nonce, expires_at, refresh_endpoint, endpoint
          FROM tokens WHERE participant_context = $1 AND identifier = $2",
         )
             .bind(participant_context.id.clone())
@@ -187,6 +188,7 @@ impl TokenStore for PostgresTokenStore {
             refresh_token,
             expires_at: record.expires_at,
             refresh_endpoint: record.refresh_endpoint,
+            endpoint: record.endpoint,
         })
     }
 
@@ -200,8 +202,8 @@ impl TokenStore for PostgresTokenStore {
         let now = self.clock.now();
 
         sqlx::query(
-            "INSERT INTO tokens (participant_context, identifier, token, token_nonce, refresh_token, refresh_token_nonce, expires_at, refresh_endpoint, last_accessed)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            "INSERT INTO tokens (participant_context, identifier, token, token_nonce, refresh_token, refresh_token_nonce, expires_at, refresh_endpoint, endpoint, last_accessed)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
              ON CONFLICT (participant_context, identifier)
              DO UPDATE SET
                 token = EXCLUDED.token,
@@ -210,6 +212,7 @@ impl TokenStore for PostgresTokenStore {
                 refresh_token_nonce = EXCLUDED.refresh_token_nonce,
                 expires_at = EXCLUDED.expires_at,
                 refresh_endpoint = EXCLUDED.refresh_endpoint,
+                endpoint = EXCLUDED.endpoint,
                 last_accessed = EXCLUDED.last_accessed",
         )
             .bind(&data.participant_context)
@@ -220,6 +223,7 @@ impl TokenStore for PostgresTokenStore {
             .bind(refresh_nonce.as_ref())
             .bind(data.expires_at)
             .bind(&data.refresh_endpoint)
+            .bind(&data.endpoint)
             .bind(now)
             .execute(&self.pool)
             .await
@@ -300,6 +304,7 @@ struct TokenRecord {
     refresh_token_nonce: Vec<u8>,
     expires_at: DateTime<chrono::Utc>,
     refresh_endpoint: String,
+    endpoint: String,
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]

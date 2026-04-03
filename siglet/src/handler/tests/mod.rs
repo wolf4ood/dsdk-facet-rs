@@ -12,7 +12,7 @@
 
 #![allow(clippy::unwrap_used)]
 
-use crate::config::{TokenSource, TransferTypes};
+use crate::config::{TokenSource, TransferType};
 use crate::handler::SigletDataFlowHandler;
 use dataplane_sdk::core::handler::DataFlowHandler;
 use dataplane_sdk::core::model::data_flow::DataFlow;
@@ -24,22 +24,26 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 #[tokio::test]
-async fn test_can_handle_with_default_accepts_http_pull() {
+async fn test_can_handle_with_http_pull_accepts_http_pull_rejects_http_push() {
     let token_store = Arc::new(MemoryTokenStore::new());
     let token_manager = Arc::new(MockTokenManager);
+    let mut mappings = HashMap::new();
+    mappings.insert(
+        "http-pull".to_string(),
+        create_transfer_type("http-pull", "HTTP", "https://pull.example.com", TokenSource::Provider),
+    );
     let handler = SigletDataFlowHandler::builder()
         .dataplane_id("dataplane-1")
         .token_store(token_store)
         .token_manager(token_manager)
+        .transfer_type_mappings(mappings)
         .build();
 
-    // Default includes http-pull
     let flow = create_test_flow("flow-1", "participant-1", "http-pull");
     let result = handler.can_handle(&flow).await;
     assert!(result.is_ok());
     assert!(result.unwrap());
 
-    // Default does not include other transfer types
     let flow2 = create_test_flow("flow-2", "participant-1", "http-push");
     let result2 = handler.can_handle(&flow2).await;
     assert!(result2.is_ok());
@@ -53,11 +57,11 @@ async fn test_can_handle_with_matching_transfer_type_accepts() {
     let mut mappings = HashMap::new();
     mappings.insert(
         "http-pull".to_string(),
-        create_transfer_type("http-pull", "HTTP", TokenSource::Provider),
+        create_transfer_type("http-pull", "HTTP", "https://pull.example.com", TokenSource::Provider),
     );
     mappings.insert(
         "http-push".to_string(),
-        create_transfer_type("http-push", "HTTP", TokenSource::Client),
+        create_transfer_type("http-push", "HTTP", "https://push.example.com", TokenSource::Client),
     );
 
     let handler = SigletDataFlowHandler::builder()
@@ -81,11 +85,11 @@ async fn test_can_handle_with_non_matching_transfer_type_rejects() {
     let mut mappings = HashMap::new();
     mappings.insert(
         "http-pull".to_string(),
-        create_transfer_type("http-pull", "HTTP", TokenSource::Provider),
+        create_transfer_type("http-pull", "HTTP", "https://pull.example.com", TokenSource::Provider),
     );
     mappings.insert(
         "http-push".to_string(),
-        create_transfer_type("http-push", "HTTP", TokenSource::Client),
+        create_transfer_type("http-push", "HTTP", "https://push.example.com", TokenSource::Client),
     );
 
     let handler = SigletDataFlowHandler::builder()
@@ -109,7 +113,7 @@ async fn test_can_handle_with_single_transfer_type() {
     let mut mappings = HashMap::new();
     mappings.insert(
         "http-pull".to_string(),
-        create_transfer_type("http-pull", "HTTP", TokenSource::Provider),
+        create_transfer_type("http-pull", "HTTP", "https://pull.example.com", TokenSource::Provider),
     );
 
     let handler = SigletDataFlowHandler::builder()
@@ -144,7 +148,7 @@ async fn test_on_start_generates_token_for_provider_token_source() {
     let mut mappings = HashMap::new();
     mappings.insert(
         "http-pull".to_string(),
-        create_transfer_type("http-pull", "HTTP", TokenSource::Provider),
+        create_transfer_type("http-pull", "HTTP", "https://pull.example.com", TokenSource::Provider),
     );
 
     let handler = SigletDataFlowHandler::builder()
@@ -171,84 +175,7 @@ async fn test_on_start_generates_token_for_provider_token_source() {
     assert!(data_address.get_property("refreshToken").is_some());
     assert!(data_address.get_property("expiresIn").is_some());
     assert!(data_address.get_property("refreshEndpoint").is_some());
-}
-
-#[tokio::test]
-async fn test_on_start_skips_token_for_client_token_source() {
-    use dataplane_sdk::core::db::memory::MemoryContext;
-    use dataplane_sdk::core::db::tx::TransactionalContext;
-
-    let token_store = Arc::new(MemoryTokenStore::new());
-    let token_manager = Arc::new(MockTokenManager);
-    let mut mappings = HashMap::new();
-    mappings.insert(
-        "http-push".to_string(),
-        create_transfer_type("http-push", "HTTP", TokenSource::Client),
-    );
-
-    let handler = SigletDataFlowHandler::builder()
-        .token_store(token_store)
-        .token_manager(token_manager)
-        .transfer_type_mappings(mappings)
-        .dataplane_id("dataplane-1")
-        .build();
-
-    let flow = create_test_flow("flow-1", "participant-1", "http-push");
-
-    let context = MemoryContext;
-    let mut tx = context.begin().await.unwrap();
-
-    let result = handler.on_start(&mut tx, &flow).await;
-    assert!(result.is_ok());
-
-    let response = result.unwrap();
-    let data_address = response.data_address.unwrap();
-
-    // Verify no token properties are present
-    assert!(data_address.get_property("authorization").is_none());
-    assert!(data_address.get_property("authType").is_none());
-    assert!(data_address.get_property("refreshToken").is_none());
-    assert!(data_address.get_property("expiresIn").is_none());
-    assert!(data_address.get_property("refreshEndpoint").is_none());
-}
-
-#[tokio::test]
-async fn test_on_start_skips_token_for_none_token_source() {
-    use dataplane_sdk::core::db::memory::MemoryContext;
-    use dataplane_sdk::core::db::tx::TransactionalContext;
-
-    let token_store = Arc::new(MemoryTokenStore::new());
-    let token_manager = Arc::new(MockTokenManager);
-    let mut mappings = HashMap::new();
-    mappings.insert(
-        "s3-pull".to_string(),
-        create_transfer_type("s3-pull", "S3", TokenSource::None),
-    );
-
-    let handler = SigletDataFlowHandler::builder()
-        .token_store(token_store)
-        .token_manager(token_manager)
-        .transfer_type_mappings(mappings)
-        .dataplane_id("dataplane-1")
-        .build();
-
-    let flow = create_test_flow("flow-1", "participant-1", "s3-pull");
-
-    let context = MemoryContext;
-    let mut tx = context.begin().await.unwrap();
-
-    let result = handler.on_start(&mut tx, &flow).await;
-    assert!(result.is_ok());
-
-    let response = result.unwrap();
-    let data_address = response.data_address.unwrap();
-
-    // Verify no token properties are present
-    assert!(data_address.get_property("authorization").is_none());
-    assert!(data_address.get_property("authType").is_none());
-    assert!(data_address.get_property("refreshToken").is_none());
-    assert!(data_address.get_property("expiresIn").is_none());
-    assert!(data_address.get_property("refreshEndpoint").is_none());
+    assert!(data_address.get_property("endpoint").is_some());
 }
 
 #[tokio::test]
@@ -261,7 +188,7 @@ async fn test_on_prepare_generates_token_for_client_token_source() {
     let mut mappings = HashMap::new();
     mappings.insert(
         "http-push".to_string(),
-        create_transfer_type("http-push", "HTTP", TokenSource::Client),
+        create_transfer_type("http-push", "HTTP", "https://push.example.com", TokenSource::Client),
     );
 
     let handler = SigletDataFlowHandler::builder()
@@ -300,7 +227,7 @@ async fn test_on_prepare_skips_token_for_provider_token_source() {
     let mut mappings = HashMap::new();
     mappings.insert(
         "http-pull".to_string(),
-        create_transfer_type("http-pull", "HTTP", TokenSource::Provider),
+        create_transfer_type("http-pull", "HTTP", "https://pull.example.com", TokenSource::Provider),
     );
 
     let handler = SigletDataFlowHandler::builder()
@@ -311,40 +238,6 @@ async fn test_on_prepare_skips_token_for_provider_token_source() {
         .build();
 
     let flow = create_test_flow("flow-1", "participant-1", "http-pull");
-
-    let context = MemoryContext;
-    let mut tx = context.begin().await.unwrap();
-
-    let result = handler.on_prepare(&mut tx, &flow).await;
-    assert!(result.is_ok());
-
-    let response = result.unwrap();
-
-    // Verify no data address is present
-    assert!(response.data_address.is_none());
-}
-
-#[tokio::test]
-async fn test_on_prepare_skips_token_for_none_token_source() {
-    use dataplane_sdk::core::db::memory::MemoryContext;
-    use dataplane_sdk::core::db::tx::TransactionalContext;
-
-    let token_store = Arc::new(MemoryTokenStore::new());
-    let token_manager = Arc::new(MockTokenManager);
-    let mut mappings = HashMap::new();
-    mappings.insert(
-        "s3-pull".to_string(),
-        create_transfer_type("s3-pull", "S3", TokenSource::None),
-    );
-
-    let handler = SigletDataFlowHandler::builder()
-        .token_store(token_store)
-        .token_manager(token_manager)
-        .transfer_type_mappings(mappings)
-        .dataplane_id("dataplane-1")
-        .build();
-
-    let flow = create_test_flow("flow-1", "participant-1", "s3-pull");
 
     let context = MemoryContext;
     let mut tx = context.begin().await.unwrap();
@@ -417,10 +310,16 @@ async fn test_on_terminate_revokes_token_successfully() {
     let token_manager = Arc::new(TrackingTokenManager {
         revoke_called: revoke_called_clone,
     });
+    let mut mappings = HashMap::new();
+    mappings.insert(
+        "http-pull".to_string(),
+        create_transfer_type("http-pull", "HTTP", "https://pull.example.com", TokenSource::Provider),
+    );
     let handler = SigletDataFlowHandler::builder()
         .token_store(token_store)
         .token_manager(token_manager)
         .dataplane_id("test-dataplane")
+        .transfer_type_mappings(mappings)
         .build();
 
     let flow = create_test_flow("flow-1", "participant-1", "http-pull");
@@ -495,13 +394,20 @@ async fn test_on_terminate_ignores_token_not_found_error() {
         refresh_token: "test_refresh".to_string(),
         expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
         refresh_endpoint: "https://test.endpoint/refresh".to_string(),
+        endpoint: "https://test.endpoint/data".to_string(),
     };
     token_store.save_token(token_data).await.unwrap();
 
+    let mut mappings = HashMap::new();
+    mappings.insert(
+        "http-pull".to_string(),
+        create_transfer_type("http-pull", "HTTP", "https://pull.example.com", TokenSource::Provider),
+    );
     let handler = SigletDataFlowHandler::builder()
         .token_store(token_store.clone())
         .token_manager(token_manager)
         .dataplane_id("test-dataplane")
+        .transfer_type_mappings(mappings)
         .build();
 
     let flow = create_test_flow("flow-1", "participant-1", "http-pull");
@@ -568,10 +474,16 @@ async fn test_on_terminate_propagates_other_errors() {
 
     let token_store = Arc::new(MemoryTokenStore::new());
     let token_manager = Arc::new(ErrorTokenManager);
+    let mut mappings = HashMap::new();
+    mappings.insert(
+        "http-pull".to_string(),
+        create_transfer_type("http-pull", "HTTP", "https://pull.example.com", TokenSource::Provider),
+    );
     let handler = SigletDataFlowHandler::builder()
         .token_store(token_store)
         .token_manager(token_manager)
         .dataplane_id("test-dataplane")
+        .transfer_type_mappings(mappings)
         .build();
 
     let flow = create_test_flow("flow-1", "participant-1", "http-pull");
@@ -640,10 +552,16 @@ fn create_test_flow(id: &str, participant_id: &str, transfer_type: &str) -> Data
 }
 
 /// Helper function to create a TransferTypes configuration
-fn create_transfer_type(transfer_type: &str, endpoint_type: &str, token_source: TokenSource) -> TransferTypes {
-    TransferTypes::builder()
+fn create_transfer_type(
+    transfer_type: &str,
+    endpoint_type: &str,
+    endpoint: &str,
+    token_source: TokenSource,
+) -> TransferType {
+    TransferType::builder()
         .transfer_type(transfer_type.to_string())
         .endpoint_type(endpoint_type.to_string())
+        .endpoint(endpoint.to_string())
         .token_source(token_source)
         .build()
 }

@@ -26,7 +26,7 @@ use crate::token::TokenError;
 use crate::util::clock::{Clock, default_clock};
 use async_trait::async_trait;
 use bon::Builder;
-use chrono::{DateTime, TimeDelta, Utc};
+use chrono::{TimeDelta, Utc};
 use std::sync::Arc;
 
 /// Manages token lifecycle with automatic refresh and distributed coordination.
@@ -51,12 +51,18 @@ impl TokenClientApi {
         participant_context: &ParticipantContext,
         identifier: &str,
         owner: &str,
-    ) -> Result<String, TokenError> {
+    ) -> Result<TokenResult, TokenError> {
         let data = self.token_store.get_token(participant_context, identifier).await?;
+
+        // Capture endpoint now — it does not change during refresh
+        let endpoint = data.endpoint.clone();
 
         // Check token validity
         if self.clock.now() < (data.expires_at - TimeDelta::milliseconds(self.refresh_before_expiry_ms)) {
-            return Ok(data.token);
+            return Ok(TokenResult {
+                token: data.token,
+                endpoint,
+            });
         }
 
         // Token is expiring, acquire lock for refresh
@@ -89,37 +95,17 @@ impl TokenClientApi {
         };
 
         drop(guard);
-        Ok(token)
+        Ok(TokenResult { token, endpoint })
     }
 
-    // TODO refactor to take a single struct argument instead of 6+ parameters
-    #[allow(clippy::too_many_arguments)]
-    pub async fn save_token(
-        &self,
-        participant_context: &str,
-        identifier: &str,
-        token: &str,
-        refresh_token: &str,
-        refresh_endpoint: &str,
-        expires_at: DateTime<Utc>,
-        owner: &str,
-    ) -> Result<(), TokenError> {
+    pub async fn save_token(&self, token_data: TokenData, owner: &str) -> Result<(), TokenError> {
         let guard = self
             .lock_manager
-            .lock(identifier, owner)
+            .lock(&token_data.identifier, owner)
             .await
             .map_err(|e| TokenError::general_error(format!("Failed to acquire lock: {}", e)))?;
 
-        let data = TokenData {
-            participant_context: participant_context.to_string(),
-            identifier: identifier.to_string(),
-            token: token.to_string(),
-            refresh_token: refresh_token.to_string(),
-            expires_at,
-            refresh_endpoint: refresh_endpoint.to_string(),
-        };
-
-        self.token_store.save_token(data).await?;
+        self.token_store.save_token(token_data).await?;
         drop(guard);
         Ok(())
     }
@@ -158,14 +144,25 @@ pub trait TokenClient: Send + Sync {
     ) -> Result<TokenData, TokenError>;
 }
 
+/// The result of a successful `get_token` call, containing the access token and data endpoint.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TokenResult {
+    /// The access token to include in requests to the data endpoint.
+    pub token: String,
+    /// The URL of the data endpoint this token grants access to.
+    pub endpoint: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TokenData {
     pub identifier: String,
     pub participant_context: String,
     pub token: String,
     pub refresh_token: String,
-    pub expires_at: DateTime<Utc>,
+    pub expires_at: chrono::DateTime<Utc>,
     pub refresh_endpoint: String,
+    /// The URL of the data endpoint this token grants access to.
+    pub endpoint: String,
 }
 
 /// Persists and retrieves tokens with optional expiration tracking.

@@ -191,8 +191,8 @@ pub async fn wait_for_pods_deleted_by_label(namespace: &str, label_selector: &st
         .output()
         .context("Failed to check for pods")?;
 
-    // If no pods exist, we're done
-    if check_output.stdout.is_empty() {
+    // If no pods exist, we're done (trim whitespace — kubectl may emit a trailing newline)
+    if check_output.stdout.trim_ascii().is_empty() {
         return Ok(());
     }
 

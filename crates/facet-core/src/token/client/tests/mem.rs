@@ -29,6 +29,7 @@ async fn create_store_with_tokens() -> MemoryTokenStore {
             refresh_token: "refresh1".to_string(),
             expires_at: expiration,
             refresh_endpoint: "https://example.com/refresh".to_string(),
+            endpoint: "https://provider1.example.com/data".to_string(),
         })
         .await
         .expect("Failed to save token");
@@ -41,6 +42,7 @@ async fn create_store_with_tokens() -> MemoryTokenStore {
             refresh_token: "refresh2".to_string(),
             expires_at: expiration,
             refresh_endpoint: "https://example.com/refresh".to_string(),
+            endpoint: "https://provider2.example.com/data".to_string(),
         })
         .await
         .expect("Failed to save token");
@@ -53,6 +55,7 @@ async fn create_store_with_tokens() -> MemoryTokenStore {
             refresh_token: "refresh3".to_string(),
             expires_at: expiration,
             refresh_endpoint: "https://example.com/refresh".to_string(),
+            endpoint: "https://provider3.example.com/data".to_string(),
         })
         .await
         .expect("Failed to save token");
@@ -81,6 +84,7 @@ async fn test_save_token_success() {
         refresh_token: "refresh123".to_string(),
         expires_at: expiration,
         refresh_endpoint: "https://example.com/refresh".to_string(),
+        endpoint: "https://example.com/data".to_string(),
     };
 
     let result = store.save_token(test_data.clone()).await;
@@ -100,6 +104,7 @@ async fn test_save_token_success() {
         retrieved.refresh_endpoint, "https://example.com/refresh",
         "Refresh endpoint should match"
     );
+    assert_eq!(retrieved.endpoint, "https://example.com/data", "Endpoint should match");
 }
 
 #[tokio::test]
@@ -127,6 +132,7 @@ async fn test_save_token_upserts_on_duplicate() {
         refresh_token: "old_refresh".to_string(),
         expires_at: expires_at_1,
         refresh_endpoint: "https://old.example.com/refresh".to_string(),
+        endpoint: "https://old.example.com/data".to_string(),
     };
 
     let token_data2 = TokenData {
@@ -136,6 +142,7 @@ async fn test_save_token_upserts_on_duplicate() {
         refresh_token: "new_refresh".to_string(),
         expires_at: expires_at_2,
         refresh_endpoint: "https://new.example.com/refresh".to_string(),
+        endpoint: "https://new.example.com/data".to_string(),
     };
 
     // First save succeeds
@@ -152,6 +159,7 @@ async fn test_save_token_upserts_on_duplicate() {
     assert_eq!(retrieved.refresh_token, "new_refresh");
     assert_eq!(retrieved.expires_at, expires_at_2);
     assert_eq!(retrieved.refresh_endpoint, "https://new.example.com/refresh");
+    assert_eq!(retrieved.endpoint, "https://new.example.com/data");
 }
 
 #[tokio::test]
@@ -169,6 +177,7 @@ async fn test_remove_tokens_used_before_success() {
             refresh_token: "refresh1".to_string(),
             expires_at: expiration,
             refresh_endpoint: "https://example.com/refresh".to_string(),
+            endpoint: "https://example.com/data".to_string(),
         })
         .await
         .expect("Failed to save");
@@ -188,6 +197,73 @@ async fn test_remove_tokens_used_before_success() {
 }
 
 #[tokio::test]
+async fn test_endpoint_is_stored_and_retrieved() {
+    let store = MemoryTokenStore::new();
+    let expiration = Utc::now() + TimeDelta::seconds(10);
+
+    store
+        .save_token(TokenData {
+            participant_context: "participant1".to_string(),
+            identifier: "flow-1".to_string(),
+            token: "access-token".to_string(),
+            refresh_token: "refresh-token".to_string(),
+            expires_at: expiration,
+            refresh_endpoint: "https://provider.example.com/refresh".to_string(),
+            endpoint: "https://provider.example.com/data/asset-1".to_string(),
+        })
+        .await
+        .unwrap();
+
+    let pc = &ParticipantContext::builder().id("participant1").build();
+    let retrieved = store.get_token(pc, "flow-1").await.unwrap();
+
+    assert_eq!(retrieved.endpoint, "https://provider.example.com/data/asset-1");
+}
+
+#[tokio::test]
+async fn test_update_token_preserves_endpoint() {
+    let store = MemoryTokenStore::new();
+    let expiration = Utc::now() + TimeDelta::seconds(10);
+    let original_endpoint = "https://provider.example.com/data/asset-1";
+
+    store
+        .save_token(TokenData {
+            participant_context: "participant1".to_string(),
+            identifier: "flow-1".to_string(),
+            token: "old-token".to_string(),
+            refresh_token: "old-refresh".to_string(),
+            expires_at: expiration,
+            refresh_endpoint: "https://provider.example.com/refresh".to_string(),
+            endpoint: original_endpoint.to_string(),
+        })
+        .await
+        .unwrap();
+
+    // update_token simulates what happens on a token refresh: only the token credentials change
+    store
+        .update_token(TokenData {
+            participant_context: "participant1".to_string(),
+            identifier: "flow-1".to_string(),
+            token: "new-token".to_string(),
+            refresh_token: "new-refresh".to_string(),
+            expires_at: expiration + TimeDelta::hours(1),
+            refresh_endpoint: "https://provider.example.com/refresh".to_string(),
+            endpoint: "https://different.example.com/ignored".to_string(), // should be ignored
+        })
+        .await
+        .unwrap();
+
+    let pc = &ParticipantContext::builder().id("participant1").build();
+    let retrieved = store.get_token(pc, "flow-1").await.unwrap();
+
+    assert_eq!(retrieved.token, "new-token", "Token should be updated");
+    assert_eq!(
+        retrieved.endpoint, original_endpoint,
+        "Endpoint must not change on update"
+    );
+}
+
+#[tokio::test]
 async fn test_context_isolation_save() {
     let store = MemoryTokenStore::new();
     let now = Utc::now();
@@ -199,6 +275,7 @@ async fn test_context_isolation_save() {
         refresh_token: "refresh_p1".to_string(),
         expires_at: now,
         refresh_endpoint: "https://p1.example.com/refresh".to_string(),
+        endpoint: "https://p1.example.com/data".to_string(),
     };
 
     let token_p2 = TokenData {
@@ -208,6 +285,7 @@ async fn test_context_isolation_save() {
         refresh_token: "refresh_p2".to_string(),
         expires_at: now,
         refresh_endpoint: "https://p2.example.com/refresh".to_string(),
+        endpoint: "https://p2.example.com/data".to_string(),
     };
 
     store.save_token(token_p1).await.unwrap();
@@ -248,6 +326,7 @@ async fn test_context_isolation_get() {
         refresh_token: "refresh_p1".to_string(),
         expires_at: now,
         refresh_endpoint: "https://p1.example.com/refresh".to_string(),
+        endpoint: "https://p1.example.com/data".to_string(),
     };
 
     let token_p2 = TokenData {
@@ -257,6 +336,7 @@ async fn test_context_isolation_get() {
         refresh_token: "refresh_p2".to_string(),
         expires_at: now,
         refresh_endpoint: "https://p2.example.com/refresh".to_string(),
+        endpoint: "https://p2.example.com/data".to_string(),
     };
 
     store.save_token(token_p1).await.unwrap();
@@ -300,6 +380,7 @@ async fn test_context_isolation_update() {
         refresh_token: "refresh_p1".to_string(),
         expires_at: now,
         refresh_endpoint: "https://p1.example.com/refresh".to_string(),
+        endpoint: "https://p1.example.com/data".to_string(),
     };
 
     let token_p2 = TokenData {
@@ -309,6 +390,7 @@ async fn test_context_isolation_update() {
         refresh_token: "refresh_p2".to_string(),
         expires_at: now,
         refresh_endpoint: "https://p2.example.com/refresh".to_string(),
+        endpoint: "https://p2.example.com/data".to_string(),
     };
 
     store.save_token(token_p1).await.unwrap();
@@ -321,6 +403,7 @@ async fn test_context_isolation_update() {
         refresh_token: "refresh_p1_updated".to_string(),
         expires_at: now,
         refresh_endpoint: "https://p1.example.com/refresh".to_string(),
+        endpoint: "https://p1.example.com/data".to_string(),
     };
 
     store.update_token(updated_p1).await.unwrap();
@@ -346,6 +429,7 @@ async fn test_context_isolation_update() {
         refresh_token: "refresh_p3".to_string(),
         expires_at: now,
         refresh_endpoint: "https://p3.example.com/refresh".to_string(),
+        endpoint: "https://p3.example.com/data".to_string(),
     };
 
     let result_p3 = store.update_token(update_p3).await;
@@ -365,6 +449,7 @@ async fn test_context_isolation_remove() {
         refresh_token: "refresh_p1".to_string(),
         expires_at: now,
         refresh_endpoint: "https://p1.example.com/refresh".to_string(),
+        endpoint: "https://p1.example.com/data".to_string(),
     };
 
     let token_p2 = TokenData {
@@ -374,6 +459,7 @@ async fn test_context_isolation_remove() {
         refresh_token: "refresh_p2".to_string(),
         expires_at: now,
         refresh_endpoint: "https://p2.example.com/refresh".to_string(),
+        endpoint: "https://p2.example.com/data".to_string(),
     };
 
     store.save_token(token_p1).await.unwrap();
