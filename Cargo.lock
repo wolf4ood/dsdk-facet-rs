@@ -1711,6 +1711,7 @@ dependencies = [
  "base64 0.22.1",
  "dsdk-facet-core",
  "dsdk-facet-testcontainers",
+ "jsonwebtoken",
  "reqwest",
  "serde_json",
  "tokio",

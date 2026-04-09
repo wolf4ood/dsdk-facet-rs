@@ -10,7 +10,9 @@
 //       Metaform Systems, Inc. - initial API and implementation
 //
 
-use crate::jwt::{JwtVerificationError, KeyFormat, VaultVerificationKeyResolver, VerificationKeyResolver};
+use crate::jwt::{
+    JwkKeyType, JwkSetProvider, JwtVerificationError, KeyFormat, VaultVerificationKeyResolver, VerificationKeyResolver,
+};
 use crate::vault::{KeyMetadata, PublicKeyFormat, VaultError, VaultSigningClient};
 use async_trait::async_trait;
 use base64::Engine;
@@ -333,4 +335,371 @@ fn test_key(byte: u8) -> Vec<u8> {
 
 fn make_resolver(client: Arc<MockVaultSigningClient>) -> Arc<VaultVerificationKeyResolver> {
     Arc::new(VaultVerificationKeyResolver::builder().vault_client(client).build())
+}
+
+#[tokio::test]
+async fn jwk_set_is_empty_before_initialize() {
+    let client = Arc::new(MockVaultSigningClient::new("my-key", &[test_key(1)]));
+    let resolver = make_resolver(client);
+
+    assert!(
+        resolver.jwk_set().await.keys.is_empty(),
+        "JWK set should be empty before initialize()"
+    );
+}
+
+#[tokio::test]
+async fn jwk_set_contains_one_entry_per_cached_key() {
+    let client = Arc::new(MockVaultSigningClient::new("my-key", &[test_key(1), test_key(2)]));
+    let resolver = make_resolver(client);
+    resolver.initialize().await.unwrap();
+
+    assert_eq!(
+        resolver.jwk_set().await.keys.len(),
+        2,
+        "JWK set should have one entry per cached key"
+    );
+}
+
+#[tokio::test]
+async fn jwk_set_entries_are_okp_eddsa() {
+    let client = Arc::new(MockVaultSigningClient::new("my-key", &[test_key(0xAB)]));
+    let resolver = make_resolver(client);
+    resolver.initialize().await.unwrap();
+
+    let jwk = &resolver.jwk_set().await.keys[0];
+
+    assert_eq!(jwk.kty, JwkKeyType::Okp, "key type should be OKP");
+    assert_eq!(jwk.crv.as_deref(), Some("Ed25519"), "curve should be Ed25519");
+    assert_eq!(jwk.alg.as_deref(), Some("EdDSA"), "algorithm should be EdDSA");
+}
+
+#[tokio::test]
+async fn jwk_set_x_parameter_is_base64url_of_raw_key() {
+    let raw = test_key(0xAB);
+    let client = Arc::new(MockVaultSigningClient::new("my-key", &[raw.clone()]));
+    let resolver = make_resolver(client);
+    resolver.initialize().await.unwrap();
+
+    let x = resolver.jwk_set().await.keys[0]
+        .x
+        .clone()
+        .expect("x parameter must be present");
+    let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(&x).unwrap();
+
+    assert_eq!(decoded, raw, "x should be the base64url-encoded raw key bytes");
+}
+
+#[tokio::test]
+async fn jwk_set_kid_matches_resolver_kid_format() {
+    let client = Arc::new(MockVaultSigningClient::new("signing-key", &[test_key(1), test_key(2)]));
+    let resolver = make_resolver(client);
+    resolver.initialize().await.unwrap();
+
+    let mut kids: Vec<_> = resolver
+        .jwk_set()
+        .await
+        .keys
+        .into_iter()
+        .filter_map(|k| k.kid)
+        .collect();
+    kids.sort();
+
+    assert_eq!(kids, vec!["signing-key-1", "signing-key-2"]);
+}
+
+#[tokio::test]
+async fn test_vault_signing_key_resolver_successful_resolution() {
+    use super::common::create_test_verifier;
+    use crate::jwt::jwtutils::{SigningKeyRecord, VaultSigningKeyResolver, generate_ed25519_keypair_pem};
+    use crate::jwt::{JwtGenerator, JwtVerifier, LocalJwtGenerator, SigningAlgorithm, TokenClaims};
+    use crate::vault::{MemoryVaultClient, VaultClient};
+    use chrono::Utc;
+
+    let keypair = generate_ed25519_keypair_pem().expect("Failed to generate keypair");
+    let vault_client = Arc::new(MemoryVaultClient::new());
+
+    let pc = crate::context::ParticipantContext::builder()
+        .id("test-participant")
+        .identifier("did:web:example.com")
+        .audience("test-audience")
+        .build();
+
+    let key_record = SigningKeyRecord::builder()
+        .private_key(std::str::from_utf8(&keypair.private_key).unwrap())
+        .kid("did:web:example.com#key-1")
+        .key_format(KeyFormat::PEM)
+        .build();
+
+    vault_client
+        .store_secret(&pc, "signing-key", &serde_json::to_string(&key_record).unwrap())
+        .await
+        .expect("Failed to store secret");
+
+    let vault_resolver = Arc::new(
+        VaultSigningKeyResolver::builder()
+            .vault_client(vault_client)
+            .base_path("signing-key")
+            .build(),
+    );
+
+    let generator = LocalJwtGenerator::builder()
+        .signing_key_resolver(vault_resolver)
+        .signing_algorithm(SigningAlgorithm::EdDSA)
+        .build();
+
+    let now = Utc::now().timestamp();
+    let claims = TokenClaims::builder()
+        .sub("user-123")
+        .aud("test-audience")
+        .exp(now + 10000)
+        .build();
+
+    let token = generator
+        .generate_token(&pc, claims)
+        .await
+        .expect("Token generation should succeed");
+
+    let verifier = create_test_verifier(keypair.public_key, KeyFormat::PEM, SigningAlgorithm::EdDSA);
+    let verified = verifier
+        .verify_token("test-audience", &token)
+        .await
+        .expect("Token verification should succeed");
+
+    assert_eq!(verified.sub, "user-123");
+    assert_eq!(verified.iss, "did:web:example.com");
+}
+
+#[tokio::test]
+async fn test_vault_signing_key_resolver_missing_key() {
+    use crate::jwt::jwtutils::VaultSigningKeyResolver;
+    use crate::jwt::{JwtGenerator, LocalJwtGenerator, SigningAlgorithm, TokenClaims};
+    use crate::vault::MemoryVaultClient;
+    use chrono::Utc;
+
+    let vault_client = Arc::new(MemoryVaultClient::new());
+
+    let pc = crate::context::ParticipantContext::builder()
+        .id("test-participant")
+        .identifier("did:web:example.com")
+        .audience("test-audience")
+        .build();
+
+    let vault_resolver = Arc::new(
+        VaultSigningKeyResolver::builder()
+            .vault_client(vault_client)
+            .base_path("missing-key")
+            .build(),
+    );
+
+    let generator = LocalJwtGenerator::builder()
+        .signing_key_resolver(vault_resolver)
+        .signing_algorithm(SigningAlgorithm::EdDSA)
+        .build();
+
+    let now = Utc::now().timestamp();
+    let claims = TokenClaims::builder()
+        .sub("user-123")
+        .aud("test-audience")
+        .exp(now + 10000)
+        .build();
+
+    let result = generator.generate_token(&pc, claims).await;
+
+    assert!(result.is_err());
+    let error_msg = result.unwrap_err().to_string();
+    assert!(
+        error_msg.contains("Failed to resolve signing key from vault"),
+        "Error message should mention vault resolution failure"
+    );
+}
+
+#[tokio::test]
+async fn test_vault_signing_key_resolver_different_participants() {
+    use super::common::create_test_verifier;
+    use crate::jwt::jwtutils::{SigningKeyRecord, VaultSigningKeyResolver, generate_ed25519_keypair_pem};
+    use crate::jwt::{JwtGenerator, JwtVerifier, LocalJwtGenerator, SigningAlgorithm, TokenClaims};
+    use crate::vault::{MemoryVaultClient, VaultClient};
+    use chrono::Utc;
+
+    let keypair1 = generate_ed25519_keypair_pem().expect("Failed to generate keypair 1");
+    let keypair2 = generate_ed25519_keypair_pem().expect("Failed to generate keypair 2");
+    let vault_client = Arc::new(MemoryVaultClient::new());
+
+    let pc1 = crate::context::ParticipantContext::builder()
+        .id("participant-1")
+        .identifier("did:web:example.com")
+        .audience("audience-1")
+        .build();
+    let pc2 = crate::context::ParticipantContext::builder()
+        .id("participant-2")
+        .identifier("did:web:example.com")
+        .audience("audience-2")
+        .build();
+
+    let record1 = SigningKeyRecord::builder()
+        .private_key(std::str::from_utf8(&keypair1.private_key).unwrap())
+        .kid("did:web:example.com#key-1")
+        .key_format(KeyFormat::PEM)
+        .build();
+    vault_client
+        .store_secret(&pc1, "signing-key", &serde_json::to_string(&record1).unwrap())
+        .await
+        .expect("Failed to store secret for participant 1");
+
+    let record2 = SigningKeyRecord::builder()
+        .private_key(std::str::from_utf8(&keypair2.private_key).unwrap())
+        .kid("did:web:example.com#key-2")
+        .key_format(KeyFormat::PEM)
+        .build();
+    vault_client
+        .store_secret(&pc2, "signing-key", &serde_json::to_string(&record2).unwrap())
+        .await
+        .expect("Failed to store secret for participant 2");
+
+    let vault_resolver = Arc::new(
+        VaultSigningKeyResolver::builder()
+            .vault_client(vault_client)
+            .base_path("signing-key")
+            .build(),
+    );
+    let generator = LocalJwtGenerator::builder()
+        .signing_key_resolver(vault_resolver)
+        .signing_algorithm(SigningAlgorithm::EdDSA)
+        .build();
+
+    let now = Utc::now().timestamp();
+
+    let token1 = generator
+        .generate_token(
+            &pc1,
+            TokenClaims::builder()
+                .sub("user-123")
+                .aud("audience-1")
+                .exp(now + 10000)
+                .build(),
+        )
+        .await
+        .expect("Token 1 generation should succeed");
+
+    let token2 = generator
+        .generate_token(
+            &pc2,
+            TokenClaims::builder()
+                .sub("user-456")
+                .aud("audience-2")
+                .exp(now + 10000)
+                .build(),
+        )
+        .await
+        .expect("Token 2 generation should succeed");
+
+    let verifier1 = create_test_verifier(keypair1.public_key, KeyFormat::PEM, SigningAlgorithm::EdDSA);
+    let claims1 = verifier1
+        .verify_token("audience-1", &token1)
+        .await
+        .expect("Token 1 verification should succeed");
+    assert_eq!(claims1.sub, "user-123");
+
+    let verifier2 = create_test_verifier(keypair2.public_key, KeyFormat::PEM, SigningAlgorithm::EdDSA);
+    let claims2 = verifier2
+        .verify_token("audience-2", &token2)
+        .await
+        .expect("Token 2 verification should succeed");
+    assert_eq!(claims2.sub, "user-456");
+
+    // Cross-keypair verification must fail
+    assert!(verifier2.verify_token("audience-1", &token1).await.is_err());
+}
+
+#[test]
+fn test_signing_key_record_serialization() {
+    use crate::jwt::jwtutils::SigningKeyRecord;
+
+    let record = SigningKeyRecord::builder()
+        .private_key("test-private-key-content")
+        .kid("did:web:example.com#key-123")
+        .key_format(KeyFormat::PEM)
+        .build();
+
+    let json = serde_json::to_string(&record).expect("Failed to serialize");
+    assert!(json.contains("private_key"));
+    assert!(json.contains("test-private-key-content"));
+    assert!(json.contains("kid"));
+    assert!(json.contains("did:web:example.com#key-123"));
+    assert!(json.contains("key_format"));
+    assert!(json.contains("PEM"));
+
+    let deserialized: SigningKeyRecord = serde_json::from_str(&json).expect("Failed to deserialize");
+    assert_eq!(deserialized.private_key, "test-private-key-content");
+    assert_eq!(deserialized.kid, "did:web:example.com#key-123");
+    assert_eq!(deserialized.key_format, KeyFormat::PEM);
+}
+
+#[test]
+fn test_signing_key_record_round_trip() {
+    use crate::jwt::jwtutils::SigningKeyRecord;
+
+    let pem_key = "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIAbcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOP\n-----END PRIVATE KEY-----";
+
+    let original = SigningKeyRecord::builder()
+        .private_key(pem_key)
+        .kid("did:web:example.org#signing-key-1")
+        .key_format(KeyFormat::DER)
+        .build();
+
+    let json = serde_json::to_string(&original).expect("Failed to serialize");
+    let roundtrip: SigningKeyRecord = serde_json::from_str(&json).expect("Failed to deserialize");
+
+    assert_eq!(original.private_key, roundtrip.private_key);
+    assert_eq!(original.kid, roundtrip.kid);
+    assert_eq!(original.key_format, roundtrip.key_format);
+}
+
+#[test]
+fn test_signing_key_record_pretty_json() {
+    use crate::jwt::jwtutils::SigningKeyRecord;
+
+    let record = SigningKeyRecord::builder()
+        .private_key("my-private-key")
+        .kid("my-kid")
+        .key_format(KeyFormat::PEM)
+        .build();
+
+    let pretty_json = serde_json::to_string_pretty(&record).expect("Failed to serialize");
+    assert!(pretty_json.contains('\n'));
+
+    let deserialized: SigningKeyRecord = serde_json::from_str(&pretty_json).expect("Failed to deserialize");
+    assert_eq!(deserialized.private_key, "my-private-key");
+    assert_eq!(deserialized.kid, "my-kid");
+    assert_eq!(deserialized.key_format, KeyFormat::PEM);
+}
+
+#[test]
+fn test_signing_key_record_default_key_format() {
+    use crate::jwt::jwtutils::SigningKeyRecord;
+
+    let record = SigningKeyRecord::builder()
+        .private_key("test-key")
+        .kid("test-kid")
+        .build();
+    assert_eq!(record.key_format, KeyFormat::PEM);
+}
+
+#[test]
+fn test_signing_key_record_with_der_format() {
+    use crate::jwt::jwtutils::SigningKeyRecord;
+
+    let record = SigningKeyRecord::builder()
+        .private_key("der-key-content")
+        .kid("did:web:test.com#key-der")
+        .key_format(KeyFormat::DER)
+        .build();
+
+    let json = serde_json::to_string(&record).expect("Failed to serialize");
+    assert!(json.contains("DER"));
+
+    let deserialized: SigningKeyRecord = serde_json::from_str(&json).expect("Failed to deserialize");
+    assert_eq!(deserialized.key_format, KeyFormat::DER);
+    assert_eq!(deserialized.private_key, "der-key-content");
 }

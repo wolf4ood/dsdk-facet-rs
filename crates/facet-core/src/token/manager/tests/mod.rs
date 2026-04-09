@@ -18,7 +18,7 @@ mod mem;
 mod token_manager;
 
 use super::{JwtTokenManager, TokenManager};
-use crate::jwt::{JwtGenerationError, JwtGenerator, JwtVerificationError, JwtVerifier};
+use crate::jwt::{JwkSet, JwkSetProvider, JwtGenerationError, JwtGenerator, JwtVerificationError, JwtVerifier};
 use crate::token::manager::MemoryRenewableTokenStore;
 use crate::util::clock::{Clock, MockClock};
 use async_trait::async_trait;
@@ -36,6 +36,16 @@ impl JwtGenerator for MockJwtGenerator {
         _claims: crate::jwt::TokenClaims,
     ) -> Result<String, JwtGenerationError> {
         Ok("mock_jwt_token".to_string())
+    }
+}
+
+// Mock JWK set provider for testing
+pub(super) struct MockJwkSetProvider;
+
+#[async_trait]
+impl JwkSetProvider for MockJwkSetProvider {
+    async fn jwk_set(&self) -> JwkSet {
+        JwkSet { keys: vec![] }
     }
 }
 
@@ -67,6 +77,7 @@ fn create_test_manager() -> JwtTokenManager {
         .token_generator(Arc::new(MockJwtGenerator))
         .client_verifier(Arc::new(MockJwtVerifier))
         .provider_verifier(Arc::new(MockJwtVerifier))
+        .jwk_set_provider(Arc::new(MockJwkSetProvider))
         .build()
 }
 
@@ -202,6 +213,7 @@ async fn test_weak_server_secret_rejected() {
         .token_generator(Arc::new(MockJwtGenerator))
         .client_verifier(Arc::new(MockJwtVerifier))
         .provider_verifier(Arc::new(MockJwtVerifier))
+        .jwk_set_provider(Arc::new(MockJwkSetProvider))
         .build();
 
     let pc = ParticipantContext::builder().id("test_participant").build();
@@ -236,6 +248,7 @@ async fn test_empty_server_secret_rejected() {
         .token_generator(Arc::new(MockJwtGenerator))
         .client_verifier(Arc::new(MockJwtVerifier))
         .provider_verifier(Arc::new(MockJwtVerifier))
+        .jwk_set_provider(Arc::new(MockJwkSetProvider))
         .build();
 
     let pc = ParticipantContext::builder().id("test_participant").build();
@@ -270,6 +283,7 @@ async fn test_valid_server_secret_accepted() {
         .token_generator(Arc::new(MockJwtGenerator))
         .client_verifier(Arc::new(MockJwtVerifier))
         .provider_verifier(Arc::new(MockJwtVerifier))
+        .jwk_set_provider(Arc::new(MockJwkSetProvider))
         .build();
 
     let pc = ParticipantContext::builder().id("test_participant").build();
@@ -426,6 +440,7 @@ fn test_custom_refresh_token_size() {
         .token_generator(Arc::new(MockJwtGenerator))
         .client_verifier(Arc::new(MockJwtVerifier))
         .provider_verifier(Arc::new(MockJwtVerifier))
+        .jwk_set_provider(Arc::new(MockJwkSetProvider))
         .build();
 
     let (token, hash) = manager.create_renewal_token().unwrap();
@@ -458,6 +473,7 @@ fn test_default_refresh_token_size() {
         .token_generator(Arc::new(MockJwtGenerator))
         .client_verifier(Arc::new(MockJwtVerifier))
         .provider_verifier(Arc::new(MockJwtVerifier))
+        .jwk_set_provider(Arc::new(MockJwkSetProvider))
         .build();
 
     let (token, _hash) = manager.create_renewal_token().unwrap();
@@ -468,4 +484,11 @@ fn test_default_refresh_token_size() {
         64,
         "Token should be 64 hex characters with default 32-byte config"
     );
+}
+
+#[tokio::test]
+async fn test_jwk_set_delegates_to_provider() {
+    let manager = create_test_manager();
+    let jwk_set = manager.jwk_set().await.expect("jwk_set() should succeed");
+    assert!(jwk_set.keys.is_empty(), "MockJwkSetProvider returns an empty JWK set");
 }

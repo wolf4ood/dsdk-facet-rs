@@ -18,12 +18,15 @@
 //! Note: These tests share a single Siglet deployment and can run in parallel.
 
 use crate::fixtures::consumer_did::ensure_consumer_did;
-use crate::fixtures::siglet::ensure_siglet_deployed;
+use crate::fixtures::siglet::{SigletDeployment, ensure_siglet_deployed};
 use crate::utils::*;
 use anyhow::{Context, Result};
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use dsdk_facet_core::context::ParticipantContext;
 use dsdk_facet_core::jwt::jwtutils::StaticSigningKeyResolver;
-use dsdk_facet_core::jwt::{JwtGenerator, KeyFormat, LocalJwtGenerator, SigningAlgorithm, TokenClaims};
+use dsdk_facet_core::jwt::{JwkSet, JwtGenerator, KeyFormat, LocalJwtGenerator, SigningAlgorithm, TokenClaims};
+use jsonwebtoken::Algorithm;
 use reqwest::Client;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -79,14 +82,7 @@ async fn test_siglet_deployment_and_health() -> Result<()> {
     Ok(())
 }
 
-/// Test consumer-provider pull interaction
-///
-/// This test verifies the complete pull transfer flow:
-/// - Consumer calls prepare endpoint (no data address returned)
-/// - Provider calls start endpoint and returns data address with tokens
-/// - Consumer calls started endpoint with provider's data address
-/// - Consumer refreshes the access token
-/// - Provider terminates the transfer
+/// Test consumer-provider pull interactions
 #[tokio::test]
 #[ignore]
 async fn test_pull_operations() -> Result<()> {
@@ -94,111 +90,173 @@ async fn test_pull_operations() -> Result<()> {
     let key_material = ensure_consumer_did().await?;
     let private_key_der = key_material.private_key_der.to_vec();
 
-    // Pre-flight: verify the DID document served by the consumer-did pod contains the
-    // expected public key before making any API calls. If this fails the signing key the
-    // test uses won't match what Siglet fetches from the DID server, causing an opaque
-    // "Invalid token signature" at the refresh step.
-    {
-        let did_doc_raw = kubectl_exec(
-            E2E_NAMESPACE,
-            &deployment.pod_name,
-            "siglet",
-            &["sh", "-c", "wget -q -O- http://consumer/.well-known/did.json"],
-        )
-        .context("Failed to fetch consumer DID document from inside siglet pod")?;
-
-        let did_doc: serde_json::Value =
-            serde_json::from_str(&did_doc_raw).context("Failed to parse consumer DID document")?;
-
-        let served_multibase = did_doc
-            .get("verificationMethod")
-            .and_then(|vms| vms.as_array())
-            .and_then(|arr| arr.first())
-            .and_then(|vm| vm.get("publicKeyMultibase"))
-            .and_then(|v| v.as_str())
-            .context("No publicKeyMultibase in served DID document")?;
-
-        let expected_multibase = String::from_utf8(
-            read_secret_bytes(E2E_NAMESPACE, "consumer-did-private-key", "publicKeyMultibase")
-                .context("Failed to read expected public key from consumer-did-private-key secret")?,
-        )
-        .context("Non-UTF8 public key multibase in secret")?;
-
-        assert_eq!(
-            served_multibase, expected_multibase,
-            "DID document public key mismatch: the consumer-did pod is not serving the key from setup.sh.\n\
-             Served:   {}\n\
-             Expected: {}\n\
-             Re-run 'cd e2e && ./scripts/setup.sh' to reprovision the consumer DID server.",
-            served_multibase, expected_multibase
-        );
-        println!("DID document key verified: {}", &served_multibase[..20]);
-    }
-
-    let signaling_url = format!("http://localhost:{}", deployment.signaling_port);
-    let client = Client::new();
-
-    // Use unique IDs per run so retries don't collide with flows left in Siglet state
-    // from a prior attempt.
+    // Use unique IDs per run so retries don't collide with flows left in Siglet
+    // state from a prior attempt.
     let run_id = Uuid::new_v4().to_string();
-    let dataset_id = format!("dataset-{}", run_id);
-    let agreement_id = format!("agreement-{}", run_id);
-    let consumer_flow_id = format!("consumer-flow-{}", run_id);
-    let provider_flow_id = format!("provider-flow-{}", run_id);
+    let ctx = TestCtx::new(&deployment, &run_id);
 
-    // Step 1: Consumer calls prepare endpoint
-    let prepare_message = serde_json::json!({
-        "datasetId": dataset_id,
+    preflight_verify_did(&ctx).await?;
+    step_prepare(&ctx).await?;
+    let start_out = step_start(&ctx).await?;
+    step_started(&ctx, &start_out.data_address).await?;
+    let api_token = retrieve_and_verify_token(&ctx).await?;
+    verify_jwks_signature(&ctx, &start_out.token).await?;
+    let refresh_out = do_refresh(&ctx, &api_token, &start_out.refresh_token, &private_key_der).await?;
+    check_token_rotation(&ctx, &api_token, &refresh_out.new_access_token).await?;
+    step_terminate(&ctx).await?;
+
+    Ok(())
+}
+
+/// Immutable setup shared across all steps of the pull transfer test sequence.
+struct TestCtx {
+    client: Client,
+    signaling_url: String,
+    verify_url: String,
+    siglet_api_port: u16,
+    refresh_api_port: u16,
+    run_id: String,
+    dataset_id: String,
+    agreement_id: String,
+    consumer_flow_id: String,
+    provider_flow_id: String,
+    pod_name: String,
+}
+
+impl TestCtx {
+    fn new(deployment: &SigletDeployment, run_id: &str) -> Self {
+        TestCtx {
+            client: Client::new(),
+            signaling_url: format!("http://localhost:{}", deployment.signaling_port),
+            verify_url: format!("http://localhost:{}/tokens/verify", deployment.siglet_api_port),
+            siglet_api_port: deployment.siglet_api_port,
+            refresh_api_port: deployment.refresh_api_port,
+            run_id: run_id.to_string(),
+            dataset_id: format!("dataset-{}", run_id),
+            agreement_id: format!("agreement-{}", run_id),
+            consumer_flow_id: format!("consumer-flow-{}", run_id),
+            provider_flow_id: format!("provider-flow-{}", run_id),
+            pod_name: deployment.pod_name.clone(),
+        }
+    }
+}
+
+/// Data returned by `step_start` that subsequent steps depend on.
+struct StartOutput {
+    /// Raw JWT access token issued by Siglet.
+    token: String,
+    /// Full `dataAddress` value from the start response, forwarded to the started step.
+    data_address: serde_json::Value,
+    /// Opaque refresh token from `endpointProperties`.
+    refresh_token: String,
+}
+
+/// Data returned by `do_refresh`.
+struct RefreshOutput {
+    new_access_token: String,
+}
+
+// ---------------------------------------------------------------------------
+// Step functions
+// ---------------------------------------------------------------------------
+
+/// Pre-flight: verify that the DID document served by the consumer-did pod
+/// contains the expected public key. A mismatch causes an opaque "Invalid token
+/// signature" at the refresh step, so we fail fast with a clear message here.
+async fn preflight_verify_did(ctx: &TestCtx) -> Result<()> {
+    let did_doc_raw = kubectl_exec(
+        E2E_NAMESPACE,
+        &ctx.pod_name,
+        "siglet",
+        &["sh", "-c", "wget -q -O- http://consumer/.well-known/did.json"],
+    )
+    .context("Failed to fetch consumer DID document from inside siglet pod")?;
+
+    let did_doc: serde_json::Value =
+        serde_json::from_str(&did_doc_raw).context("Failed to parse consumer DID document")?;
+
+    let served_multibase = did_doc
+        .get("verificationMethod")
+        .and_then(|vms| vms.as_array())
+        .and_then(|arr| arr.first())
+        .and_then(|vm| vm.get("publicKeyMultibase"))
+        .and_then(|v| v.as_str())
+        .context("No publicKeyMultibase in served DID document")?;
+
+    let expected_multibase = String::from_utf8(
+        read_secret_bytes(E2E_NAMESPACE, "consumer-did-private-key", "publicKeyMultibase")
+            .context("Failed to read expected public key from consumer-did-private-key secret")?,
+    )
+    .context("Non-UTF8 public key multibase in secret")?;
+
+    assert_eq!(
+        served_multibase, expected_multibase,
+        "DID document public key mismatch: the consumer-did pod is not serving the key from setup.sh.\n\
+         Served:   {}\n\
+         Expected: {}\n\
+         Re-run 'cd e2e && ./scripts/setup.sh' to reprovision the consumer DID server.",
+        served_multibase, expected_multibase
+    );
+    println!("DID document key verified: {}", &served_multibase[..20]);
+    Ok(())
+}
+
+/// Step 1: Consumer calls the prepare endpoint. For a pull transfer no data
+/// address is returned.
+async fn step_prepare(ctx: &TestCtx) -> Result<()> {
+    let message = serde_json::json!({
+        "datasetId": ctx.dataset_id,
         "participantId": "did:web:consumer",
-        "processId": consumer_flow_id,
-        "agreementId": agreement_id,
+        "processId": ctx.consumer_flow_id,
+        "agreementId": ctx.agreement_id,
         "transferType": "http-pull",
         "dataspaceContext": "test-dataspace",
         "callbackAddress": "https://consumer.example.com/callback",
-        "messageId": format!("msg-prepare-{}", run_id),
+        "messageId": format!("msg-prepare-{}", ctx.run_id),
         "counterPartyId": "did:web:provider",
         "labels": [],
         "metadata": {},
     });
 
-    let prepare_response = client
-        .post(format!("{}/api/v1/dataflows/prepare", signaling_url))
+    let response = ctx
+        .client
+        .post(format!("{}/api/v1/dataflows/prepare", ctx.signaling_url))
         .header("Content-Type", "application/json")
-        .json(&prepare_message)
+        .json(&message)
         .send()
         .await
         .context("Failed to send prepare request")?;
 
     assert!(
-        prepare_response.status().is_success(),
+        response.status().is_success(),
         "Prepare request should succeed, got status: {}",
-        prepare_response.status()
+        response.status()
     );
 
-    let prepare_result: serde_json::Value = prepare_response
-        .json()
-        .await
-        .context("Failed to parse prepare response")?;
+    let result: serde_json::Value = response.json().await.context("Failed to parse prepare response")?;
 
-    // Verify prepare response does NOT contain a meaningful dataAddress (it's a pull)
-    if let Some(data_address) = prepare_result.get("dataAddress") {
+    if let Some(data_address) = result.get("dataAddress") {
         assert!(
             data_address.is_null(),
             "Prepare response should not contain a dataAddress for pull transfers, got: {}",
             data_address
         );
     }
+    Ok(())
+}
 
-    // Step 2: Provider calls start endpoint
-    let start_message = serde_json::json!({
-        "datasetId": dataset_id,
+/// Step 2: Provider calls the start endpoint. Returns the issued tokens and
+/// data address for use in later steps.
+async fn step_start(ctx: &TestCtx) -> Result<StartOutput> {
+    let message = serde_json::json!({
+        "datasetId": ctx.dataset_id,
         "participantId": "did:web:provider",
-        "processId": provider_flow_id,
-        "agreementId": agreement_id,
+        "processId": ctx.provider_flow_id,
+        "agreementId": ctx.agreement_id,
         "transferType": "http-pull",
         "dataspaceContext": "test-dataspace",
         "callbackAddress": "https://provider.example.com/callback",
-        "messageId": format!("msg-start-{}", run_id),
+        "messageId": format!("msg-start-{}", ctx.run_id),
         "counterPartyId": "did:web:consumer",
         "labels": [],
         "metadata": {
@@ -207,153 +265,165 @@ async fn test_pull_operations() -> Result<()> {
         }
     });
 
-    let start_response = client
-        .post(format!("{}/api/v1/dataflows/start", signaling_url))
+    let response = ctx
+        .client
+        .post(format!("{}/api/v1/dataflows/start", ctx.signaling_url))
         .header("Content-Type", "application/json")
-        .json(&start_message)
+        .json(&message)
         .send()
         .await
         .context("Failed to send start request")?;
 
     assert!(
-        start_response.status().is_success(),
+        response.status().is_success(),
         "Start request should succeed, got status: {}",
-        start_response.status()
+        response.status()
     );
 
-    let start_result: serde_json::Value = start_response.json().await.context("Failed to parse start response")?;
+    let result: serde_json::Value = response.json().await.context("Failed to parse start response")?;
 
+    assert!(result.get("state").is_some(), "Response should contain 'state' field");
     assert!(
-        start_result.get("state").is_some(),
-        "Response should contain 'state' field"
-    );
-    assert!(
-        start_result.get("dataplaneId").is_some(),
+        result.get("dataplaneId").is_some(),
         "Response should contain 'dataplaneId' field"
     );
-
-    let state = start_result["state"].as_str().unwrap();
-    assert_eq!(state, "STARTED", "DataFlow should be in STARTED state");
-
-    let data_address = start_result.get("dataAddress").unwrap();
-    let properties = data_address.get("endpointProperties").unwrap();
-    let properties_array = properties.as_array().unwrap();
-
-    let has_auth = properties_array
-        .iter()
-        .any(|p| p.get("name").and_then(|n| n.as_str()) == Some("authorization"));
-    assert!(has_auth, "Authorization property not found in data address");
-
-    let auth_prop = properties_array
-        .iter()
-        .find(|p| p.get("name").and_then(|n| n.as_str()) == Some("authorization"))
-        .unwrap();
-
-    let token = auth_prop.get("value").and_then(|v| v.as_str()).unwrap();
-    assert!(!token.is_empty());
-
-    // Decode and parse the JWT
-    let token_parts: Vec<&str> = token.split('.').collect();
     assert_eq!(
-        token_parts.len(),
-        3,
-        "JWT should have 3 parts (header.payload.signature)"
+        result["state"].as_str().unwrap(),
+        "STARTED",
+        "DataFlow should be in STARTED state"
     );
 
-    use base64::Engine;
-    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-    let payload_bytes = URL_SAFE_NO_PAD
-        .decode(token_parts[1])
-        .context("Failed to decode JWT payload")?;
-    let payload_str = String::from_utf8(payload_bytes).context("Failed to convert payload to string")?;
-    let jwt_payload: serde_json::Value =
-        serde_json::from_str(&payload_str).context("Failed to parse JWT payload as JSON")?;
+    let data_address = result
+        .get("dataAddress")
+        .context("Response should contain 'dataAddress'")?
+        .clone();
 
-    assert_eq!(
-        jwt_payload.get("claim1").and_then(|v| v.as_str()),
-        Some("claimvalue1"),
-        "claim1 should be present in JWT with correct value"
-    );
-    assert_eq!(
-        jwt_payload.get("claim2").and_then(|v| v.as_str()),
-        Some("claimvalue2"),
-        "claim2 should be present in JWT with correct value"
-    );
+    // Inspect endpoint properties within a block so the borrow on data_address
+    // ends before data_address is moved into the return value.
+    let (token, refresh_token) = {
+        let properties = data_address["endpointProperties"]
+            .as_array()
+            .context("endpointProperties should be an array")?;
 
-    let has_refresh = properties_array
-        .iter()
-        .any(|p| p.get("name").and_then(|n| n.as_str()) == Some("refreshToken"));
-    assert!(has_refresh, "Refresh token not found in data address");
+        let get_prop = |name: &str| -> Option<&str> {
+            properties
+                .iter()
+                .find(|p| p.get("name").and_then(|n| n.as_str()) == Some(name))
+                .and_then(|p| p.get("value"))
+                .and_then(|v| v.as_str())
+        };
 
-    let has_endpoint = properties_array
-        .iter()
-        .any(|p| p.get("name").and_then(|n| n.as_str()) == Some("refreshEndpoint"));
-    assert!(has_endpoint, "Refresh Endpoint not found in data address");
+        let token = get_prop("authorization")
+            .filter(|s| !s.is_empty())
+            .context("Authorization property not found or empty in data address")?;
 
-    // Step 3: Consumer calls started endpoint with provider's data address
-    let started_message = serde_json::json!({
+        // Decode the JWT payload and verify the provider's custom claims are present.
+        let token_parts: Vec<&str> = token.split('.').collect();
+        assert_eq!(
+            token_parts.len(),
+            3,
+            "JWT should have 3 parts (header.payload.signature)"
+        );
+        let payload_bytes = URL_SAFE_NO_PAD
+            .decode(token_parts[1])
+            .context("Failed to decode JWT payload")?;
+        let jwt_payload: serde_json::Value =
+            serde_json::from_slice(&payload_bytes).context("Failed to parse JWT payload as JSON")?;
+        assert_eq!(
+            jwt_payload.get("claim1").and_then(|v| v.as_str()),
+            Some("claimvalue1"),
+            "claim1 should be present in JWT with correct value"
+        );
+        assert_eq!(
+            jwt_payload.get("claim2").and_then(|v| v.as_str()),
+            Some("claimvalue2"),
+            "claim2 should be present in JWT with correct value"
+        );
+
+        let refresh_token = get_prop("refreshToken").context("Refresh token not found in data address")?;
+        assert!(
+            get_prop("refreshEndpoint").is_some(),
+            "Refresh endpoint not found in data address"
+        );
+
+        (token.to_string(), refresh_token.to_string())
+    };
+
+    Ok(StartOutput {
+        token,
+        data_address,
+        refresh_token,
+    })
+}
+
+/// Step 3: Consumer calls the started endpoint, forwarding the provider's data address.
+async fn step_started(ctx: &TestCtx, data_address: &serde_json::Value) -> Result<()> {
+    let message = serde_json::json!({
         "participantId": "did:web:consumer",
         "counterPartyId": "did:web:provider",
         "dataAddress": data_address,
-        "messageId": format!("msg-started-{}", run_id)
+        "messageId": format!("msg-started-{}", ctx.run_id)
     });
 
-    let started_response = client
+    let response = ctx
+        .client
         .post(format!(
             "{}/api/v1/dataflows/{}/started",
-            signaling_url, consumer_flow_id
+            ctx.signaling_url, ctx.consumer_flow_id
         ))
         .header("Content-Type", "application/json")
-        .json(&started_message)
+        .json(&message)
         .send()
         .await
         .context("Failed to send started request")?;
 
-    let status = started_response.status();
+    let status = response.status();
     if !status.is_success() {
-        let error_body = started_response
+        let body = response
             .text()
             .await
             .unwrap_or_else(|_| "Unable to read error body".to_string());
-        panic!(
-            "Started request should succeed, got status: {}, body: {}",
-            status, error_body
-        );
+        anyhow::bail!("Started request should succeed, got status: {}, body: {}", status, body);
     }
+    Ok(())
+}
 
-    // Step 4: Retrieve the token stored for the consumer flow via the token API.
+/// Steps 4–5: Retrieve the access token stored for the consumer flow from the
+/// token API, then verify it via the verify endpoint. Returns the raw token
+/// string for use in subsequent steps.
+async fn retrieve_and_verify_token(ctx: &TestCtx) -> Result<String> {
     let get_token_url = format!(
         "http://localhost:{}/tokens/{}/{}",
-        deployment.siglet_api_port, "siglet-participant", consumer_flow_id
+        ctx.siglet_api_port, "siglet-participant", ctx.consumer_flow_id
     );
-    let get_token_response = client
+    let get_response = ctx
+        .client
         .get(&get_token_url)
         .send()
         .await
         .context("Failed to retrieve token from token API")?;
 
-    if !get_token_response.status().is_success() {
-        let status = get_token_response.status();
-        let body = get_token_response.text().await.unwrap_or_default();
+    if !get_response.status().is_success() {
+        let status = get_response.status();
+        let body = get_response.text().await.unwrap_or_default();
         anyhow::bail!("Token retrieval returned HTTP {}: {}", status, body);
     }
 
-    let get_token_result: serde_json::Value = get_token_response
+    let get_result: serde_json::Value = get_response
         .json()
         .await
         .context("Failed to parse token retrieval response")?;
 
-    let api_token = get_token_result
+    let api_token = get_result
         .get("token")
         .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty())
-        .with_context(|| format!("Retrieved token should not be empty, got: {}", get_token_result))?
+        .with_context(|| format!("Retrieved token should not be empty, got: {}", get_result))?
         .to_string();
 
-    // Step 5: Verify the access token.
-    let verify_url = format!("http://localhost:{}/tokens/verify", deployment.siglet_api_port);
-    let verify_response = client
-        .post(&verify_url)
+    let verify_response = ctx
+        .client
+        .post(&ctx.verify_url)
         .header("Content-Type", "application/json")
         .json(&serde_json::json!({ "token": api_token, "audience": "did:web:provider" }))
         .send()
@@ -377,19 +447,64 @@ async fn test_pull_operations() -> Result<()> {
         verify_result
     );
 
-    // Step 6: Consumer refreshes the access token via the dedicated Refresh API port.
-    // Port-forwarding for port 8082 is set up in the fixture, so we can call it
-    // directly from the test using the reqwest client.
-    let refresh_token_prop = properties_array
-        .iter()
-        .find(|p| p.get("name").and_then(|n| n.as_str()) == Some("refreshToken"))
-        .unwrap();
-    let refresh_token_value = refresh_token_prop.get("value").and_then(|v| v.as_str()).unwrap();
+    Ok(api_token)
+}
 
-    // Build a JWT to authenticate the refresh request (consumer signs as itself, audience = provider).
+/// Step 6: Fetch Siglet's JWKS and use it to verify the JWT signature of the
+/// access token. This confirms the token is signed with the key Siglet advertises.
+async fn verify_jwks_signature(ctx: &TestCtx, token: &str) -> Result<()> {
+    let jwks_url = format!("http://localhost:{}/keys", ctx.siglet_api_port);
+    let jwks_response = ctx
+        .client
+        .get(&jwks_url)
+        .send()
+        .await
+        .context("Failed to fetch JWKS from /keys endpoint")?;
+
+    assert!(
+        jwks_response.status().is_success(),
+        "JWKS endpoint should return 200 OK, got: {}",
+        jwks_response.status()
+    );
+
+    let jwks: JwkSet = jwks_response.json().await.context("Failed to parse JWKS response")?;
+    assert!(!jwks.keys.is_empty(), "JWKS should contain at least one key");
+
+    let header = jsonwebtoken::decode_header(token).context("Failed to decode JWT header")?;
+    let kid = header.kid.as_deref().unwrap_or("");
+    let jwk = jwks
+        .keys
+        .iter()
+        .find(|k| k.kid.as_deref() == Some(kid))
+        .with_context(|| format!("No key with kid '{}' found in JWKS", kid))?;
+
+    let x_bytes = URL_SAFE_NO_PAD
+        .decode(jwk.x.as_deref().context("JWKS key missing 'x' parameter")?)
+        .context("Failed to base64url-decode JWKS key 'x' parameter")?;
+
+    let decoding_key = jsonwebtoken::DecodingKey::from_ed_der(&x_bytes);
+    let mut validation = jsonwebtoken::Validation::new(Algorithm::EdDSA);
+    validation.validate_exp = false;
+    validation.set_audience(&["did:web:provider"]);
+    validation.required_spec_claims = std::collections::HashSet::new();
+
+    jsonwebtoken::decode::<serde_json::Value>(token, &decoding_key, &validation)
+        .context("JWT signature verification failed using public key from JWKS endpoint")?;
+
+    Ok(())
+}
+
+/// Step 7: Consumer refreshes the access token via the Refresh API. Returns
+/// the new access token issued by Siglet.
+async fn do_refresh(
+    ctx: &TestCtx,
+    api_token: &str,
+    refresh_token: &str,
+    private_key_der: &[u8],
+) -> Result<RefreshOutput> {
     let resolver = Arc::new(
         StaticSigningKeyResolver::builder()
-            .key(private_key_der)
+            .key(private_key_der.to_vec())
             .key_format(KeyFormat::DER)
             .iss("did:web:consumer")
             .kid("did:web:consumer#key-1")
@@ -406,7 +521,7 @@ async fn test_pull_operations() -> Result<()> {
         .unwrap()
         .as_secs() as i64;
     let mut token_claim = serde_json::Map::new();
-    token_claim.insert("token".to_string(), serde_json::Value::String(api_token.clone()));
+    token_claim.insert("token".to_string(), serde_json::Value::String(api_token.to_string()));
     let claims = TokenClaims::builder()
         .iss("did:web:consumer")
         .sub("did:web:consumer")
@@ -424,96 +539,100 @@ async fn test_pull_operations() -> Result<()> {
         .await
         .context("Failed to generate JWT for refresh")?;
 
-    let refresh_url = format!("http://localhost:{}/token/refresh", deployment.refresh_api_port);
-    let refresh_response = client
+    let refresh_url = format!("http://localhost:{}/token/refresh", ctx.refresh_api_port);
+    let response = ctx
+        .client
         .post(&refresh_url)
         .header("Content-Type", "application/x-www-form-urlencoded")
         .header("Authorization", format!("Bearer {}", bearer_jwt))
-        .body(format!(
-            "grant_type=refresh_token&refresh_token={}",
-            refresh_token_value
-        ))
+        .body(format!("grant_type=refresh_token&refresh_token={}", refresh_token))
         .send()
         .await
         .context("Token refresh request failed")?;
 
-    if !refresh_response.status().is_success() {
-        let status = refresh_response.status();
-        let body = refresh_response.text().await.unwrap_or_default();
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
         anyhow::bail!("Token refresh returned HTTP {}: {}", status, body);
     }
 
-    let refresh_result: serde_json::Value = refresh_response
+    let result: serde_json::Value = response
         .json()
         .await
         .context("Failed to parse token refresh response")?;
 
     assert!(
-        refresh_result
+        result
             .get("access_token")
             .and_then(|v| v.as_str())
             .is_some_and(|s| !s.is_empty()),
         "Refreshed access token should not be empty, got: {}",
-        refresh_result
+        result
     );
     assert!(
-        refresh_result
+        result
             .get("refresh_token")
             .and_then(|v| v.as_str())
             .is_some_and(|s| !s.is_empty()),
         "New refresh token should not be empty, got: {}",
-        refresh_result
+        result
     );
 
-    let new_access_token = refresh_result["access_token"].as_str().unwrap();
+    let new_access_token = result["access_token"].as_str().unwrap().to_string();
+    Ok(RefreshOutput { new_access_token })
+}
 
-    // Step 7: Old token should now be rejected (it was rotated out by the refresh).
-    let stale_verify_response = client
-        .post(&verify_url)
+/// Steps 8–9: Verify that the old access token is rejected after rotation and
+/// that the new token is accepted.
+async fn check_token_rotation(ctx: &TestCtx, old_token: &str, new_token: &str) -> Result<()> {
+    let stale_response = ctx
+        .client
+        .post(&ctx.verify_url)
         .header("Content-Type", "application/json")
-        .json(&serde_json::json!({ "token": api_token, "audience": "did:web:provider" }))
+        .json(&serde_json::json!({ "token": old_token, "audience": "did:web:provider" }))
         .send()
         .await
         .context("Stale token verification request failed")?;
     assert_eq!(
-        stale_verify_response.status(),
+        stale_response.status(),
         reqwest::StatusCode::UNAUTHORIZED,
         "Old access token should be rejected after refresh"
     );
 
-    // Step 8: New access token obtained from refresh should be valid.
-    let new_verify_response = client
-        .post(&verify_url)
+    let new_response = ctx
+        .client
+        .post(&ctx.verify_url)
         .header("Content-Type", "application/json")
-        .json(&serde_json::json!({ "token": new_access_token, "audience": "did:web:provider" }))
+        .json(&serde_json::json!({ "token": new_token, "audience": "did:web:provider" }))
         .send()
         .await
         .context("New token verification request failed")?;
-    if !new_verify_response.status().is_success() {
-        let status = new_verify_response.status();
-        let body = new_verify_response.text().await.unwrap_or_default();
+    if !new_response.status().is_success() {
+        let status = new_response.status();
+        let body = new_response.text().await.unwrap_or_default();
         anyhow::bail!("New access token verification returned HTTP {}: {}", status, body);
     }
+    Ok(())
+}
 
-    // Step 9: Provider terminates the transfer
-    let terminate_message = serde_json::json!({ "reason": "Test termination" });
-
-    let terminate_response = client
+/// Step 10: Provider terminates the transfer.
+async fn step_terminate(ctx: &TestCtx) -> Result<()> {
+    let response = ctx
+        .client
         .post(format!(
             "{}/api/v1/dataflows/{}/terminate",
-            signaling_url, provider_flow_id
+            ctx.signaling_url, ctx.provider_flow_id
         ))
         .header("Content-Type", "application/json")
-        .json(&terminate_message)
+        .json(&serde_json::json!({ "reason": "Test termination" }))
         .send()
         .await
         .context("Failed to send terminate request")?;
 
     assert!(
-        terminate_response.status().is_success(),
+        response.status().is_success(),
         "Terminate should return 200 OK for successful termination, got: {}",
-        terminate_response.status()
+        response.status()
     );
-
     Ok(())
 }

@@ -12,12 +12,14 @@
 
 use crate::context::ParticipantContext;
 use crate::jwt::{
-    JwtGenerationError, JwtVerificationError, KeyFormat, KeyMaterial, SigningKeyResolver, VerificationKeyResolver,
+    Jwk, JwkKeyType, JwkPublicKeyUse, JwkSet, JwkSetProvider, JwtGenerationError, JwtVerificationError, KeyFormat,
+    KeyMaterial, SigningKeyResolver, VerificationKeyResolver,
 };
 use crate::util::task::TaskHandle;
 use crate::vault::{PublicKeyFormat, VaultClient, VaultSigningClient};
 use async_trait::async_trait;
 use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use bon::Builder;
 use log::error;
 use std::collections::HashMap;
@@ -152,6 +154,18 @@ impl VaultKeyResolverState {
             .map(|k| (k.key.clone(), k.key_format))
     }
 
+    fn all_keys(&self) -> Vec<(String, Vec<u8>, KeyFormat)> {
+        self.public_keys
+            .read()
+            .map(|guard| {
+                guard
+                    .values()
+                    .map(|k| (k.kid.clone(), k.key.clone(), k.key_format))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     async fn load_keys(&self) -> Result<(), JwtVerificationError> {
         let metadata = self
             .vault_client
@@ -165,7 +179,7 @@ impl VaultKeyResolverState {
             .enumerate()
             .map(|(i, key_b64)| {
                 let kid = format!("{}-{}", metadata.key_name, i + 1);
-                let key_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+                let key_bytes = URL_SAFE_NO_PAD
                     .decode(key_b64)
                     .map_err(|e| JwtVerificationError::GeneralError(format!("Failed to decode public key: {}", e)))?;
                 Ok(CachedPublicKey::builder()
@@ -280,6 +294,30 @@ impl VerificationKeyResolver for VaultVerificationKeyResolver {
             .iss(iss)
             .kid(kid)
             .build())
+    }
+}
+
+#[async_trait]
+impl JwkSetProvider for VaultVerificationKeyResolver {
+    async fn jwk_set(&self) -> JwkSet {
+        let keys = self
+            .state
+            .all_keys()
+            .into_iter()
+            .map(|(kid, key_bytes, _key_format)| {
+                // Vault public keys are Ed25519: raw 32-byte material encoded as base64url for the `x` parameter.
+                let x = URL_SAFE_NO_PAD.encode(&key_bytes);
+                Jwk::builder()
+                    .kty(JwkKeyType::Okp)
+                    .crv("Ed25519")
+                    .x(x)
+                    .kid(kid)
+                    .key_use(JwkPublicKeyUse::Sig)
+                    .alg("EdDSA")
+                    .build()
+            })
+            .collect();
+        JwkSet { keys }
     }
 }
 

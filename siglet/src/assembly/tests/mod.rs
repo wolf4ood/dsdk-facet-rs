@@ -16,7 +16,9 @@ use crate::assembly::{create_siglet_handler, create_token_manager, generate_serv
 use crate::config::SigletConfig;
 use async_trait::async_trait;
 use dsdk_facet_core::context::ParticipantContext;
-use dsdk_facet_core::jwt::{JwtGenerationError, JwtGenerator, JwtVerificationError, JwtVerifier, TokenClaims};
+use dsdk_facet_core::jwt::{
+    JwkSet, JwkSetProvider, JwtGenerationError, JwtGenerator, JwtVerificationError, JwtVerifier, TokenClaims,
+};
 use dsdk_facet_core::token::client::MemoryTokenStore;
 use dsdk_facet_core::token::manager::MemoryRenewableTokenStore;
 use std::net::{IpAddr, Ipv4Addr};
@@ -149,11 +151,12 @@ fn test_create_token_manager_with_default_issuer() {
 
     let manager = create_token_manager(
         &cfg,
+        secret,
         jwt_gen,
         jwt_ver,
         Arc::new(MockJwtVerifier) as Arc<dyn JwtVerifier>,
-        secret,
         store,
+        Arc::new(NoOpJwkSetProvider) as Arc<dyn JwkSetProvider>,
     );
 
     // Verify manager is created
@@ -172,11 +175,12 @@ fn test_create_token_manager_with_custom_issuer() {
 
     let manager = create_token_manager(
         &cfg,
+        secret,
         jwt_gen,
         jwt_ver,
         Arc::new(MockJwtVerifier) as Arc<dyn JwtVerifier>,
-        secret,
         store,
+        Arc::new(NoOpJwkSetProvider) as Arc<dyn JwkSetProvider>,
     );
 
     assert!(Arc::strong_count(&manager) >= 1);
@@ -194,11 +198,12 @@ fn test_create_token_manager_with_custom_refresh_endpoint() {
 
     let manager = create_token_manager(
         &cfg,
+        secret,
         jwt_gen,
         jwt_ver,
         Arc::new(MockJwtVerifier) as Arc<dyn JwtVerifier>,
-        secret,
         store,
+        Arc::new(NoOpJwkSetProvider) as Arc<dyn JwkSetProvider>,
     );
 
     assert!(Arc::strong_count(&manager) >= 1);
@@ -218,11 +223,12 @@ fn test_create_token_manager_with_default_refresh_endpoint() {
 
     let manager = create_token_manager(
         &cfg,
+        secret,
         jwt_gen,
         jwt_ver,
         Arc::new(MockJwtVerifier) as Arc<dyn JwtVerifier>,
-        secret,
         store,
+        Arc::new(NoOpJwkSetProvider) as Arc<dyn JwkSetProvider>,
     );
 
     assert!(Arc::strong_count(&manager) >= 1);
@@ -240,11 +246,12 @@ fn test_create_token_manager_with_different_secret_lengths() {
     let secret16 = vec![0u8; 16];
     let manager16 = create_token_manager(
         &cfg,
+        secret16,
         jwt_gen.clone(),
         jwt_ver.clone(),
         Arc::new(MockJwtVerifier) as Arc<dyn JwtVerifier>,
-        secret16,
         store.clone(),
+        Arc::new(NoOpJwkSetProvider) as Arc<dyn JwkSetProvider>,
     );
     assert!(Arc::strong_count(&manager16) >= 1);
 
@@ -252,11 +259,12 @@ fn test_create_token_manager_with_different_secret_lengths() {
     let secret32 = vec![0u8; 32];
     let manager32 = create_token_manager(
         &cfg,
+        secret32,
         jwt_gen.clone(),
         jwt_ver.clone(),
         Arc::new(MockJwtVerifier) as Arc<dyn JwtVerifier>,
-        secret32,
         store.clone(),
+        Arc::new(NoOpJwkSetProvider) as Arc<dyn JwkSetProvider>,
     );
     assert!(Arc::strong_count(&manager32) >= 1);
 
@@ -264,11 +272,12 @@ fn test_create_token_manager_with_different_secret_lengths() {
     let secret64 = vec![0u8; 64];
     let manager64 = create_token_manager(
         &cfg,
+        secret64,
         jwt_gen,
         jwt_ver,
         Arc::new(MockJwtVerifier) as Arc<dyn JwtVerifier>,
-        secret64,
         store,
+        Arc::new(NoOpJwkSetProvider) as Arc<dyn JwkSetProvider>,
     );
     assert!(Arc::strong_count(&manager64) >= 1);
 }
@@ -283,11 +292,12 @@ fn test_create_token_manager_returns_arc() {
 
     let manager = create_token_manager(
         &cfg,
+        secret,
         jwt_gen,
         jwt_ver,
         Arc::new(MockJwtVerifier) as Arc<dyn JwtVerifier>,
-        secret,
         store,
+        Arc::new(NoOpJwkSetProvider) as Arc<dyn JwkSetProvider>,
     );
 
     // Verify it's Arc-wrapped
@@ -313,11 +323,12 @@ fn test_secret_generation_and_token_manager_integration() {
 
     let manager = create_token_manager(
         &cfg,
+        secret,
         jwt_gen,
         jwt_ver,
         Arc::new(MockJwtVerifier) as Arc<dyn JwtVerifier>,
-        secret,
         store,
+        Arc::new(NoOpJwkSetProvider) as Arc<dyn JwkSetProvider>,
     );
     assert!(Arc::strong_count(&manager) >= 1);
 }
@@ -339,11 +350,12 @@ fn test_hex_secret_generation_and_token_manager_integration() {
 
     let manager = create_token_manager(
         &cfg,
+        secret,
         jwt_gen,
         jwt_ver,
         Arc::new(MockJwtVerifier) as Arc<dyn JwtVerifier>,
-        secret,
         store,
+        Arc::new(NoOpJwkSetProvider) as Arc<dyn JwkSetProvider>,
     );
     assert!(Arc::strong_count(&manager) >= 1);
 }
@@ -360,11 +372,12 @@ fn test_token_manager_and_handler_integration() {
 
     let token_manager = create_token_manager(
         &cfg,
+        secret,
         jwt_gen,
         jwt_ver,
         Arc::new(MockJwtVerifier) as Arc<dyn JwtVerifier>,
-        secret,
         renewable_store,
+        Arc::new(NoOpJwkSetProvider) as Arc<dyn JwkSetProvider>,
     );
     let token_store = Arc::new(MemoryTokenStore::default());
 
@@ -375,6 +388,16 @@ fn test_token_manager_and_handler_integration() {
 // ============================================================================
 // Mock Implementations for Testing
 // ============================================================================
+
+/// No-op JwkSetProvider for testing
+struct NoOpJwkSetProvider;
+
+#[async_trait::async_trait]
+impl JwkSetProvider for NoOpJwkSetProvider {
+    async fn jwk_set(&self) -> JwkSet {
+        JwkSet { keys: vec![] }
+    }
+}
 
 /// Mock JWT Generator for testing
 struct MockJwtGenerator;

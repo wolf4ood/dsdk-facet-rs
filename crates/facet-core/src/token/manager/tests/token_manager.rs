@@ -773,6 +773,7 @@ fn create_jwt_token_manager(clock: Arc<dyn Clock>) -> TestFixture {
         .token_generator(generator.clone())
         .client_verifier(verifier.clone())
         .provider_verifier(verifier.clone())
+        .jwk_set_provider(Arc::new(super::MockJwkSetProvider))
         .build();
 
     TestFixture {

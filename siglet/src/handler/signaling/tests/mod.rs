@@ -15,6 +15,7 @@ use crate::config::{TokenSource, TransferType};
 use dataplane_sdk::core::handler::DataFlowHandler;
 use dataplane_sdk::core::model::data_flow::{DataFlow, DataFlowType};
 use dsdk_facet_core::context::ParticipantContext;
+use dsdk_facet_core::jwt::JwkSet;
 use dsdk_facet_core::token::TokenError;
 use dsdk_facet_core::token::client::{MemoryTokenStore, TokenStore};
 use dsdk_facet_core::token::manager::{RenewableTokenPair, TokenManager};
@@ -305,6 +306,10 @@ async fn test_on_terminate_revokes_token_successfully() {
         ) -> Result<dsdk_facet_core::jwt::TokenClaims, TokenError> {
             unimplemented!()
         }
+
+        async fn jwk_set(&self) -> Result<JwkSet, TokenError> {
+            unimplemented!()
+        }
     }
 
     let token_store = Arc::new(MemoryTokenStore::new());
@@ -382,6 +387,10 @@ async fn test_on_terminate_ignores_token_not_found_error() {
             _audience: &str,
             _token: &str,
         ) -> Result<dsdk_facet_core::jwt::TokenClaims, TokenError> {
+            unimplemented!()
+        }
+
+        async fn jwk_set(&self) -> Result<JwkSet, TokenError> {
             unimplemented!()
         }
     }
@@ -477,6 +486,10 @@ async fn test_on_terminate_propagates_other_errors() {
         ) -> Result<dsdk_facet_core::jwt::TokenClaims, TokenError> {
             unimplemented!()
         }
+
+        async fn jwk_set(&self) -> Result<JwkSet, TokenError> {
+            unimplemented!()
+        }
     }
 
     let token_store = Arc::new(MemoryTokenStore::new());
@@ -542,6 +555,10 @@ impl TokenManager for MockTokenManager {
         _audience: &str,
         _token: &str,
     ) -> Result<dsdk_facet_core::jwt::TokenClaims, TokenError> {
+        unimplemented!()
+    }
+
+    async fn jwk_set(&self) -> Result<JwkSet, TokenError> {
         unimplemented!()
     }
 }

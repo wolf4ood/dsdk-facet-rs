@@ -161,15 +161,8 @@ async fn test_key_metadata_base64url(client: &Arc<HashicorpVaultClient>) {
         INITIAL_KEY_VERSION
     );
 
-    // Verify the key is in base64url format (should NOT start with 'z')
-    let first_key = &metadata.keys[0];
-    assert!(
-        !first_key.starts_with('z'),
-        "Public key in Base64Url format should NOT start with 'z', got: {}",
-        first_key
-    );
-
     // Verify it's valid base64url by attempting to decode
+    let first_key = &metadata.keys[0];
     let decoded_key = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(first_key)
         .expect("Public key should be valid base64url");

@@ -18,8 +18,8 @@ use dataplane_sdk::core::db::data_flow::memory::MemoryDataFlowRepo;
 use dataplane_sdk::core::db::memory::MemoryContext;
 use dataplane_sdk::sdk::DataPlaneSdk;
 use dsdk_facet_core::jwt::{
-    DidWebVerificationKeyResolver, JwtGenerator, JwtVerifier, LocalJwtVerifier, SigningAlgorithm, VaultJwtGenerator,
-    VaultVerificationKeyResolver,
+    DidWebVerificationKeyResolver, JwkSetProvider, JwtGenerator, JwtVerifier, LocalJwtVerifier, SigningAlgorithm,
+    VaultJwtGenerator, VaultVerificationKeyResolver,
 };
 use dsdk_facet_core::lock::{LockManager, MemoryLockManager};
 use dsdk_facet_core::token::client::oauth::OAuth2TokenClient;
@@ -111,14 +111,20 @@ pub async fn assemble(cfg: &SigletConfig) -> Result<SigletRuntime, SigletError> 
         }
     };
 
-    let vault_provider_verifier = create_vault_verifier(vault_client.clone());
+    let vault_resolver = Arc::new(
+        VaultVerificationKeyResolver::builder()
+            .vault_client(vault_client.clone() as Arc<dyn VaultSigningClient>)
+            .build(),
+    );
+    let vault_provider_verifier = create_vault_verifier(vault_resolver.clone());
     let token_manager = create_token_manager(
         cfg,
+        server_secret,
         jwt_generator.clone(),
         jwt_verifier.clone(),
         vault_provider_verifier,
-        server_secret,
         renewable_token_store,
+        vault_resolver,
     );
 
     let sdk = assemble_memory_sdk(cfg, token_store.clone(), token_manager.clone()).await?;
@@ -262,15 +268,10 @@ pub fn assemble_token_api(
 // ============================================================================
 
 /// Creates a JWT verifier backed by the Vault signing key.
-fn create_vault_verifier(vault_client: Arc<HashicorpVaultClient>) -> Arc<dyn JwtVerifier> {
-    let verification_key_resolver = Arc::new(
-        VaultVerificationKeyResolver::builder()
-            .vault_client(vault_client as Arc<dyn VaultSigningClient>)
-            .build(),
-    );
+fn create_vault_verifier(resolver: Arc<VaultVerificationKeyResolver>) -> Arc<dyn JwtVerifier> {
     Arc::new(
         LocalJwtVerifier::builder()
-            .verification_key_resolver(verification_key_resolver)
+            .verification_key_resolver(resolver)
             .signing_algorithm(SigningAlgorithm::EdDSA)
             .build(),
     )
@@ -328,11 +329,12 @@ fn generate_server_secret(cfg: &SigletConfig) -> Result<Vec<u8>, SigletError> {
 /// Creates the token manager with all dependencies.
 fn create_token_manager(
     cfg: &SigletConfig,
+    server_secret: Vec<u8>,
     jwt_generator: Arc<dyn JwtGenerator>,
     client_verifier: Arc<dyn JwtVerifier>,
     provider_verifier: Arc<dyn JwtVerifier>,
-    server_secret: Vec<u8>,
     renewable_token_store: Arc<dyn RenewableTokenStore>,
+    jwk_set_provider: Arc<dyn JwkSetProvider>,
 ) -> Arc<dyn TokenManager> {
     let issuer = cfg
         .token_issuer
@@ -352,6 +354,7 @@ fn create_token_manager(
             .token_generator(jwt_generator)
             .client_verifier(client_verifier)
             .provider_verifier(provider_verifier)
+            .jwk_set_provider(jwk_set_provider)
             .build(),
     )
 }

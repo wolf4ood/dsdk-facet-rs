@@ -16,7 +16,7 @@ use dsdk_facet_core::context::ParticipantContext;
 use dsdk_facet_core::jwt::jwtutils::{
     StaticSigningKeyResolver, StaticVerificationKeyResolver, generate_ed25519_keypair_pem,
 };
-use dsdk_facet_core::jwt::{KeyFormat, LocalJwtGenerator, LocalJwtVerifier, SigningAlgorithm};
+use dsdk_facet_core::jwt::{JwkSet, JwkSetProvider, KeyFormat, LocalJwtGenerator, LocalJwtVerifier, SigningAlgorithm};
 use dsdk_facet_core::token::client::TokenClient;
 use dsdk_facet_core::token::client::oauth::OAuth2TokenClient;
 use dsdk_facet_core::token::manager::{JwtTokenManager, MemoryRenewableTokenStore, TokenManager};
@@ -26,6 +26,15 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
+
+struct NoOpJwkSetProvider;
+
+#[async_trait::async_trait]
+impl JwkSetProvider for NoOpJwkSetProvider {
+    async fn jwk_set(&self) -> JwkSet {
+        JwkSet { keys: vec![] }
+    }
+}
 
 const PROVIDER_DID: &str = "did:web:provider.example.com";
 const CONSUMER_DID: &str = "did:web:consumer.example.com";
@@ -82,6 +91,7 @@ async fn test_token_renewal() {
             .token_generator(provider_generator)
             .client_verifier(verifier.clone())
             .provider_verifier(verifier)
+            .jwk_set_provider(Arc::new(NoOpJwkSetProvider))
             .build(),
     );
 

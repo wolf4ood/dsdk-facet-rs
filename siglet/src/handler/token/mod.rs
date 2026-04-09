@@ -50,6 +50,7 @@ impl TokenApiHandler {
                 get(get_token).delete(delete_token),
             )
             .route("/tokens/verify", post(verify_token))
+            .route("/keys", get(get_jwk_set))
             .with_state(self)
     }
 }
@@ -64,6 +65,13 @@ async fn get_token(
         Ok(result) => (StatusCode::OK, Json(TokenResponse { token: result.token })).into_response(),
         Err(TokenError::TokenNotFound { .. }) => (StatusCode::NOT_FOUND, "Token not found").into_response(),
         Err(TokenError::NotAuthorized(msg)) => (StatusCode::UNAUTHORIZED, msg).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+async fn get_jwk_set(State(handler): State<TokenApiHandler>) -> Response {
+    match handler.token_manager.jwk_set().await {
+        Ok(set) => (StatusCode::OK, Json(set)).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }

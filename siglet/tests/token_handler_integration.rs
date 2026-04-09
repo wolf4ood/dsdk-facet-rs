@@ -14,7 +14,7 @@
 
 use chrono::Utc;
 use dsdk_facet_core::context::ParticipantContext;
-use dsdk_facet_core::jwt::TokenClaims;
+use dsdk_facet_core::jwt::{JwkSet, TokenClaims};
 use dsdk_facet_core::lock::MemoryLockManager;
 use dsdk_facet_core::token::TokenError;
 use dsdk_facet_core::token::client::{MemoryTokenStore, TokenClient, TokenClientApi, TokenData, TokenStore};
@@ -51,6 +51,10 @@ impl TokenManager for NoOpTokenManager {
     }
 
     async fn validate_token(&self, _audience: &str, _token: &str) -> Result<TokenClaims, TokenError> {
+        unimplemented!("not needed for this test")
+    }
+
+    async fn jwk_set(&self) -> Result<JwkSet, TokenError> {
         unimplemented!("not needed for this test")
     }
 }

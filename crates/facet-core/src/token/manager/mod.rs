@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use crate::context::ParticipantContext;
 use crate::jwt;
-use crate::jwt::{JwtVerifier, TokenClaims};
+use crate::jwt::{JwkSet, JwkSetProvider, JwtVerifier, TokenClaims};
 use crate::token::TokenError;
 use crate::util::clock::{Clock, default_clock};
 use async_trait::async_trait;
@@ -60,6 +60,8 @@ pub trait TokenManager: Send + Sync {
     async fn revoke_token(&self, participant_context: &ParticipantContext, flow_id: &str) -> Result<(), TokenError>;
 
     async fn validate_token(&self, audience: &str, token: &str) -> Result<TokenClaims, TokenError>;
+
+    async fn jwk_set(&self) -> Result<JwkSet, TokenError>;
 }
 
 /// A struct representing a pair of tokens used for authentication and periodic renewal.
@@ -174,6 +176,7 @@ pub struct JwtTokenManager {
     token_generator: Arc<dyn JwtGenerator>,
     client_verifier: Arc<dyn JwtVerifier>,
     provider_verifier: Arc<dyn JwtVerifier>,
+    jwk_set_provider: Arc<dyn JwkSetProvider>,
 }
 
 impl JwtTokenManager {
@@ -373,5 +376,9 @@ impl TokenManager for JwtTokenManager {
             .await
             .map_err(|_| TokenError::NotAuthorized("Token not found".to_string()))?;
         Ok(claims)
+    }
+
+    async fn jwk_set(&self) -> Result<JwkSet, TokenError> {
+        Ok(self.jwk_set_provider.jwk_set().await)
     }
 }

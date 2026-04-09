@@ -16,6 +16,7 @@ use crate::error::SigletError;
 use crate::handler::refresh::TokenRefreshHandler;
 use crate::server::handle_task_result;
 use dsdk_facet_core::context::ParticipantContext;
+use dsdk_facet_core::jwt::JwkSet;
 use dsdk_facet_core::token::TokenError;
 use dsdk_facet_core::token::manager::{RenewableTokenPair, TokenManager};
 use dsdk_facet_testcontainers::utils::{get_available_port, wait_for_port_ready};
@@ -53,6 +54,10 @@ impl TokenManager for NoOpTokenManager {
         _audience: &str,
         _token: &str,
     ) -> Result<dsdk_facet_core::jwt::TokenClaims, TokenError> {
+        unimplemented!("not used in server tests")
+    }
+
+    async fn jwk_set(&self) -> Result<JwkSet, TokenError> {
         unimplemented!("not used in server tests")
     }
 }

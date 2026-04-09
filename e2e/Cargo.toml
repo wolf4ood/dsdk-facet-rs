@@ -18,6 +18,7 @@ dsdk-facet-core = { path = "../crates/facet-core" }
 uuid = { workspace = true }
 serde_json = { workspace = true }
 reqwest = "0.12"
+jsonwebtoken = { workspace = true, features = ["rust_crypto"] }
 
 [dev-dependencies]
 

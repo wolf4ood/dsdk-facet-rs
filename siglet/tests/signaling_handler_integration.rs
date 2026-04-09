@@ -24,7 +24,7 @@ use dsdk_facet_core::context::ParticipantContext;
 use dsdk_facet_core::jwt::jwtutils::{
     StaticSigningKeyResolver, StaticVerificationKeyResolver, generate_ed25519_keypair_pem,
 };
-use dsdk_facet_core::jwt::{KeyFormat, LocalJwtGenerator, LocalJwtVerifier, SigningAlgorithm};
+use dsdk_facet_core::jwt::{JwkSet, JwkSetProvider, KeyFormat, LocalJwtGenerator, LocalJwtVerifier, SigningAlgorithm};
 use dsdk_facet_core::token::client::{MemoryTokenStore, TokenStore};
 use dsdk_facet_core::token::manager::{JwtTokenManager, MemoryRenewableTokenStore};
 use dsdk_facet_core::util::clock::{Clock, MockClock};
@@ -35,6 +35,15 @@ use siglet::handler::{
 };
 use std::collections::HashMap;
 use std::sync::Arc;
+
+struct NoOpJwkSetProvider;
+
+#[async_trait::async_trait]
+impl JwkSetProvider for NoOpJwkSetProvider {
+    async fn jwk_set(&self) -> JwkSet {
+        JwkSet { keys: vec![] }
+    }
+}
 
 #[tokio::test]
 async fn test_on_start_creates_token() {
@@ -695,6 +704,7 @@ fn create_jwt_token_manager() -> Arc<JwtTokenManager> {
             .token_generator(generator)
             .client_verifier(verifier.clone())
             .provider_verifier(verifier)
+            .jwk_set_provider(Arc::new(NoOpJwkSetProvider))
             .build(),
     )
 }
