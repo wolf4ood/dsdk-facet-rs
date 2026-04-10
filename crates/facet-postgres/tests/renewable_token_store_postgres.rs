@@ -16,6 +16,7 @@ use dsdk_facet_core::token::TokenError;
 use dsdk_facet_core::token::manager::{RenewableTokenEntry, RenewableTokenStore};
 use dsdk_facet_postgres::renewable_token_store::PostgresRenewableTokenStore;
 use dsdk_facet_testcontainers::postgres::{setup_postgres_container, truncate_to_micros};
+use serde_json::Value;
 use std::collections::HashMap;
 
 fn make_entry(
@@ -24,7 +25,7 @@ fn make_entry(
     hash: &str,
     flow_id: &str,
     subject: &str,
-    claims: HashMap<String, String>,
+    claims: HashMap<String, Value>,
     expires_at: chrono::DateTime<Utc>,
 ) -> RenewableTokenEntry {
     RenewableTokenEntry::builder()
@@ -60,7 +61,7 @@ async fn test_postgres_save_and_find_by_renewal() {
     let expires_at = initial_time + TimeDelta::seconds(3600);
 
     let mut claims = HashMap::new();
-    claims.insert("custom_claim".to_string(), "custom_value".to_string());
+    claims.insert("custom_claim".to_string(), Value::String("custom_value".to_string()));
 
     let entry = make_entry(
         "token-id-123",
@@ -93,7 +94,7 @@ async fn test_postgres_save_and_find_by_id() {
     let expires_at = initial_time + TimeDelta::seconds(3600);
 
     let mut claims = HashMap::new();
-    claims.insert("role".to_string(), "admin".to_string());
+    claims.insert("role".to_string(), Value::String("admin".to_string()));
 
     let entry = make_entry(
         "token-id-456",
@@ -147,10 +148,10 @@ async fn test_postgres_save_upserts_on_duplicate() {
     let expires_at_2 = initial_time + TimeDelta::seconds(2000);
 
     let mut claims1 = HashMap::new();
-    claims1.insert("version".to_string(), "1".to_string());
+    claims1.insert("version".to_string(), Value::String("1".to_string()));
 
     let mut claims2 = HashMap::new();
-    claims2.insert("version".to_string(), "2".to_string());
+    claims2.insert("version".to_string(), Value::String("2".to_string()));
 
     let entry1 = make_entry(
         "same-id",
@@ -191,7 +192,7 @@ async fn test_postgres_update_success() {
     let expires_at = initial_time + TimeDelta::seconds(1000);
 
     let mut claims = HashMap::new();
-    claims.insert("claim1".to_string(), "value1".to_string());
+    claims.insert("claim1".to_string(), Value::String("value1".to_string()));
 
     let entry = make_entry(
         "token-id-1",
@@ -298,7 +299,7 @@ async fn test_postgres_token_with_special_characters() {
     let expires_at = initial_time + TimeDelta::seconds(3600);
 
     let mut claims = HashMap::new();
-    claims.insert("special!@#$%".to_string(), "value!@#$%".to_string());
+    claims.insert("special!@#$%".to_string(), Value::String("value!@#$%".to_string()));
 
     let entry = make_entry(
         "id-with-dashes-123",
@@ -329,7 +330,7 @@ async fn test_postgres_token_with_long_values() {
 
     let mut claims = HashMap::new();
     for i in 0..50 {
-        claims.insert(format!("claim_{}", i), format!("value_{}", i));
+        claims.insert(format!("claim_{}", i), Value::String(format!("value_{}", i)));
     }
 
     let entry = RenewableTokenEntry::builder()
@@ -362,7 +363,7 @@ async fn test_postgres_save_find_update_flow() {
     let expires_at_1 = initial_time + TimeDelta::seconds(1000);
 
     let mut claims = HashMap::new();
-    claims.insert("session".to_string(), "abc123".to_string());
+    claims.insert("session".to_string(), Value::String("abc123".to_string()));
 
     let entry = make_entry(
         "id-1",
@@ -409,9 +410,9 @@ async fn test_postgres_claims_serialization() {
     let expires_at = initial_time + TimeDelta::seconds(3600);
 
     let mut claims = HashMap::new();
-    claims.insert("claim1".to_string(), "value1".to_string());
-    claims.insert("claim2".to_string(), "value2".to_string());
-    claims.insert("claim3".to_string(), "value3".to_string());
+    claims.insert("claim1".to_string(), Value::String("value1".to_string()));
+    claims.insert("claim2".to_string(), Value::String("value2".to_string()));
+    claims.insert("claim3".to_string(), Value::String("value3".to_string()));
 
     let entry = make_entry(
         "id-1",
@@ -425,7 +426,7 @@ async fn test_postgres_claims_serialization() {
     store.save(entry).await.unwrap();
 
     // Query database directly to verify JSONB storage
-    let row: (serde_json::Value,) = sqlx::query_as("SELECT claims FROM renewable_tokens WHERE id = $1")
+    let row: (Value,) = sqlx::query_as("SELECT claims FROM renewable_tokens WHERE id = $1")
         .bind("id-1")
         .fetch_one(&pool)
         .await
@@ -435,9 +436,18 @@ async fn test_postgres_claims_serialization() {
 
     let retrieved = store.find_by_id("id-1").await.unwrap();
     assert_eq!(retrieved.claims.len(), 3);
-    assert_eq!(retrieved.claims.get("claim1").unwrap(), "value1");
-    assert_eq!(retrieved.claims.get("claim2").unwrap(), "value2");
-    assert_eq!(retrieved.claims.get("claim3").unwrap(), "value3");
+    assert_eq!(
+        retrieved.claims.get("claim1").unwrap(),
+        &Value::String("value1".to_string())
+    );
+    assert_eq!(
+        retrieved.claims.get("claim2").unwrap(),
+        &Value::String("value2".to_string())
+    );
+    assert_eq!(
+        retrieved.claims.get("claim3").unwrap(),
+        &Value::String("value3".to_string())
+    );
 }
 
 #[tokio::test]

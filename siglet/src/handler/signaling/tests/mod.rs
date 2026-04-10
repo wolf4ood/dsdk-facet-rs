@@ -19,6 +19,7 @@ use dsdk_facet_core::jwt::JwkSet;
 use dsdk_facet_core::token::TokenError;
 use dsdk_facet_core::token::client::{MemoryTokenStore, TokenStore};
 use dsdk_facet_core::token::manager::{RenewableTokenPair, TokenManager};
+use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -270,7 +271,7 @@ async fn test_on_terminate_revokes_token_successfully() {
             &self,
             _participant_context: &ParticipantContext,
             _subject: &str,
-            _claims: HashMap<String, String>,
+            _claims: HashMap<String, Value>,
             _flow_id: String,
         ) -> Result<RenewableTokenPair, TokenError> {
             Ok(RenewableTokenPair::builder()
@@ -354,7 +355,7 @@ async fn test_on_terminate_ignores_token_not_found_error() {
             &self,
             _participant_context: &ParticipantContext,
             _subject: &str,
-            _claims: HashMap<String, String>,
+            _claims: HashMap<String, Value>,
             _flow_id: String,
         ) -> Result<RenewableTokenPair, TokenError> {
             Ok(RenewableTokenPair::builder()
@@ -451,7 +452,7 @@ async fn test_on_terminate_propagates_other_errors() {
             &self,
             _participant_context: &ParticipantContext,
             _subject: &str,
-            _claims: HashMap<String, String>,
+            _claims: HashMap<String, Value>,
             _flow_id: String,
         ) -> Result<RenewableTokenPair, TokenError> {
             Ok(RenewableTokenPair::builder()
@@ -526,7 +527,7 @@ impl TokenManager for MockTokenManager {
         &self,
         _participant_context: &ParticipantContext,
         _subject: &str,
-        _claims: HashMap<String, String>,
+        _claims: HashMap<String, Value>,
         _flow_id: String,
     ) -> Result<RenewableTokenPair, TokenError> {
         Ok(RenewableTokenPair::builder()
@@ -664,7 +665,7 @@ fn test_value_to_claim_string_with_object() {
     let value = serde_json::json!({"key1": "value1", "key2": "value2"});
     let result = SigletDataFlowHandler::value_to_claim_string(&value);
     // Should be JSON-serialized (note: order may vary, so we parse and compare)
-    let parsed: serde_json::Value = serde_json::from_str(&result).expect("Should be valid JSON");
+    let parsed: Value = serde_json::from_str(&result).expect("Should be valid JSON");
     assert_eq!(parsed["key1"], "value1");
     assert_eq!(parsed["key2"], "value2");
 }
@@ -680,7 +681,7 @@ fn test_value_to_claim_string_with_nested_object() {
     });
     let result = SigletDataFlowHandler::value_to_claim_string(&value);
     // Should be JSON-serialized
-    let parsed: serde_json::Value = serde_json::from_str(&result).expect("Should be valid JSON");
+    let parsed: Value = serde_json::from_str(&result).expect("Should be valid JSON");
     assert_eq!(parsed["user"]["name"], "Alice");
     assert_eq!(parsed["user"]["age"], 30);
     assert_eq!(parsed["active"], true);
@@ -710,7 +711,7 @@ fn test_value_to_claim_string_with_empty_object() {
 #[test]
 fn test_value_to_claim_string_with_json_encoded_string() {
     // A string value that contains a JSON-encoded string
-    let value = serde_json::Value::String("\"claimvalue1\"".to_string());
+    let value = Value::String("\"claimvalue1\"".to_string());
     let result = SigletDataFlowHandler::value_to_claim_string(&value);
     // Should unwrap the JSON encoding
     assert_eq!(result, "claimvalue1");
@@ -719,7 +720,7 @@ fn test_value_to_claim_string_with_json_encoded_string() {
 #[test]
 fn test_value_to_claim_string_with_double_json_encoded_string() {
     // A string value that contains a double JSON-encoded string
-    let value = serde_json::Value::String("\"\\\"innervalue\\\"\"".to_string());
+    let value = Value::String("\"\\\"innervalue\\\"\"".to_string());
     let result = SigletDataFlowHandler::value_to_claim_string(&value);
     // Should recursively unwrap
     assert_eq!(result, "innervalue");
@@ -728,7 +729,7 @@ fn test_value_to_claim_string_with_double_json_encoded_string() {
 #[test]
 fn test_value_to_claim_string_with_json_encoded_number() {
     // A string value that contains a JSON-encoded number
-    let value = serde_json::Value::String("42".to_string());
+    let value = Value::String("42".to_string());
     let result = SigletDataFlowHandler::value_to_claim_string(&value);
     // Should unwrap to the number as a string
     assert_eq!(result, "42");
@@ -737,7 +738,7 @@ fn test_value_to_claim_string_with_json_encoded_number() {
 #[test]
 fn test_value_to_claim_string_with_json_encoded_bool() {
     // A string value that contains a JSON-encoded boolean
-    let value = serde_json::Value::String("true".to_string());
+    let value = Value::String("true".to_string());
     let result = SigletDataFlowHandler::value_to_claim_string(&value);
     // Should unwrap to the boolean as a string
     assert_eq!(result, "true");
@@ -746,7 +747,7 @@ fn test_value_to_claim_string_with_json_encoded_bool() {
 #[test]
 fn test_value_to_claim_string_with_json_encoded_null() {
     // A string value that contains a JSON-encoded null
-    let value = serde_json::Value::String("null".to_string());
+    let value = Value::String("null".to_string());
     let result = SigletDataFlowHandler::value_to_claim_string(&value);
     // Should unwrap to empty string
     assert_eq!(result, "");
@@ -755,7 +756,7 @@ fn test_value_to_claim_string_with_json_encoded_null() {
 #[test]
 fn test_value_to_claim_string_with_json_encoded_array() {
     // A string value that contains a JSON-encoded array
-    let value = serde_json::Value::String("[\"item1\",\"item2\"]".to_string());
+    let value = Value::String("[\"item1\",\"item2\"]".to_string());
     let result = SigletDataFlowHandler::value_to_claim_string(&value);
     // Should unwrap and re-serialize as JSON
     assert_eq!(result, "[\"item1\",\"item2\"]");
@@ -764,7 +765,7 @@ fn test_value_to_claim_string_with_json_encoded_array() {
 #[test]
 fn test_value_to_claim_string_with_json_encoded_object() {
     // A string value that contains a JSON-encoded object
-    let value = serde_json::Value::String("{\"key\":\"value\"}".to_string());
+    let value = Value::String("{\"key\":\"value\"}".to_string());
     let result = SigletDataFlowHandler::value_to_claim_string(&value);
     // Should unwrap and re-serialize as JSON
     assert_eq!(result, "{\"key\":\"value\"}");

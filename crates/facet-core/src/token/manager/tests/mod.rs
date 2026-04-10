@@ -17,12 +17,13 @@ mod mem;
 #[cfg(test)]
 mod token_manager;
 
-use super::{JwtTokenManager, TokenManager};
+use super::{JwtTokenManager, TokenManager, ValidatedServerSecret};
 use crate::jwt::{JwkSet, JwkSetProvider, JwtGenerationError, JwtGenerator, JwtVerificationError, JwtVerifier};
 use crate::token::manager::MemoryRenewableTokenStore;
 use crate::util::clock::{Clock, MockClock};
 use async_trait::async_trait;
 use chrono::DateTime;
+use serde_json::Value;
 use std::sync::Arc;
 
 // Mock JWT generator for testing
@@ -66,10 +67,11 @@ impl JwtVerifier for MockJwtVerifier {
 
 fn create_test_manager() -> JwtTokenManager {
     let fixed_time = DateTime::from_timestamp(1000000000, 0).unwrap();
+    let secret = ValidatedServerSecret::try_from(b"test_secret_key_32bytes_long!!!!".to_vec()).unwrap();
     JwtTokenManager::builder()
         .issuer("test_issuer")
         .refresh_endpoint("http://localhost/refresh")
-        .server_secret(b"test_secret_key_32bytes_long!!!!".to_vec())
+        .server_secret(secret)
         .token_duration(3600)
         .renewal_token_duration(86400)
         .clock(Arc::new(MockClock::new(fixed_time)) as Arc<dyn Clock>)
@@ -195,34 +197,11 @@ fn test_hash_output_format() {
     assert_eq!(hash, hash.to_lowercase());
 }
 
-#[tokio::test]
-async fn test_weak_server_secret_rejected() {
-    use crate::context::ParticipantContext;
-    use std::collections::HashMap;
-
-    // Create manager with weak secret (less than 32 bytes)
-    let fixed_time = DateTime::from_timestamp(1000000000, 0).unwrap();
-    let manager = JwtTokenManager::builder()
-        .issuer("test_issuer")
-        .refresh_endpoint("http://localhost/refresh")
-        .server_secret(b"short_secret".to_vec()) // Only 12 bytes
-        .token_duration(3600)
-        .renewal_token_duration(86400)
-        .clock(Arc::new(MockClock::new(fixed_time)) as Arc<dyn Clock>)
-        .token_store(Arc::new(MemoryRenewableTokenStore::new()))
-        .token_generator(Arc::new(MockJwtGenerator))
-        .client_verifier(Arc::new(MockJwtVerifier))
-        .provider_verifier(Arc::new(MockJwtVerifier))
-        .jwk_set_provider(Arc::new(MockJwkSetProvider))
-        .build();
-
-    let pc = ParticipantContext::builder().id("test_participant").build();
-    let result = manager
-        .generate_pair(&pc, "test_subject", HashMap::new(), "test_flow".to_string())
-        .await;
-
+#[test]
+fn test_weak_server_secret_rejected() {
+    let result = ValidatedServerSecret::try_from(b"short_secret".to_vec()); // Only 12 bytes
     assert!(result.is_err(), "Should reject weak server secret");
-    match result.unwrap_err() {
+    match result.err().unwrap() {
         crate::token::TokenError::GeneralError(msg) => {
             assert!(msg.contains("Server secret must be at least 32 bytes"));
             assert!(msg.contains("got 12"));
@@ -231,33 +210,11 @@ async fn test_weak_server_secret_rejected() {
     }
 }
 
-#[tokio::test]
-async fn test_empty_server_secret_rejected() {
-    use crate::context::ParticipantContext;
-    use std::collections::HashMap;
-
-    let fixed_time = DateTime::from_timestamp(1000000000, 0).unwrap();
-    let manager = JwtTokenManager::builder()
-        .issuer("test_issuer")
-        .refresh_endpoint("http://localhost/refresh")
-        .server_secret(Vec::new()) // Empty secret
-        .token_duration(3600)
-        .renewal_token_duration(86400)
-        .clock(Arc::new(MockClock::new(fixed_time)) as Arc<dyn Clock>)
-        .token_store(Arc::new(MemoryRenewableTokenStore::new()))
-        .token_generator(Arc::new(MockJwtGenerator))
-        .client_verifier(Arc::new(MockJwtVerifier))
-        .provider_verifier(Arc::new(MockJwtVerifier))
-        .jwk_set_provider(Arc::new(MockJwkSetProvider))
-        .build();
-
-    let pc = ParticipantContext::builder().id("test_participant").build();
-    let result = manager
-        .generate_pair(&pc, "test_subject", HashMap::new(), "test_flow".to_string())
-        .await;
-
+#[test]
+fn test_empty_server_secret_rejected() {
+    let result = ValidatedServerSecret::try_from(Vec::new());
     assert!(result.is_err(), "Should reject empty server secret");
-    match result.unwrap_err() {
+    match result.err().unwrap() {
         crate::token::TokenError::GeneralError(msg) => {
             assert!(msg.contains("Server secret must be at least 32 bytes"));
             assert!(msg.contains("got 0"));
@@ -272,10 +229,12 @@ async fn test_valid_server_secret_accepted() {
     use std::collections::HashMap;
 
     let fixed_time = DateTime::from_timestamp(1000000000, 0).unwrap();
+    let secret = ValidatedServerSecret::try_from(b"this_is_exactly_32bytes_long!!!!".to_vec())
+        .expect("Exactly 32 bytes should be valid");
     let manager = JwtTokenManager::builder()
         .issuer("test_issuer")
         .refresh_endpoint("http://localhost/refresh")
-        .server_secret(b"this_is_exactly_32bytes_long!!!!".to_vec()) // Exactly 32 bytes
+        .server_secret(secret)
         .token_duration(3600)
         .renewal_token_duration(86400)
         .clock(Arc::new(MockClock::new(fixed_time)) as Arc<dyn Clock>)
@@ -303,7 +262,7 @@ async fn test_reserved_claim_iss_rejected() {
     let pc = ParticipantContext::builder().id("test_participant").build();
 
     let mut claims = HashMap::new();
-    claims.insert("iss".to_string(), "custom_issuer".to_string());
+    claims.insert("iss".to_string(), Value::String("custom_issuer".to_string()));
 
     let result = manager
         .generate_pair(&pc, "test_subject", claims, "test_flow".to_string())
@@ -331,7 +290,7 @@ async fn test_reserved_claim_sub_rejected() {
     let pc = ParticipantContext::builder().id("test_participant").build();
 
     let mut claims = HashMap::new();
-    claims.insert("sub".to_string(), "custom_subject".to_string());
+    claims.insert("sub".to_string(), Value::String("custom_subject".to_string()));
 
     let result = manager
         .generate_pair(&pc, "test_subject", claims, "test_flow".to_string())
@@ -355,7 +314,7 @@ async fn test_reserved_claim_jti_rejected() {
     let pc = ParticipantContext::builder().id("test_participant").build();
 
     let mut claims = HashMap::new();
-    claims.insert("jti".to_string(), "custom_jti".to_string());
+    claims.insert("jti".to_string(), Value::String("custom_jti".to_string()));
 
     let result = manager
         .generate_pair(&pc, "test_subject", claims, "test_flow".to_string())
@@ -380,7 +339,7 @@ async fn test_reserved_claims_exp_iat_nbf_rejected() {
 
     // Test exp
     let mut claims = HashMap::new();
-    claims.insert("exp".to_string(), "123456789".to_string());
+    claims.insert("exp".to_string(), Value::String("123456789".to_string()));
     let result = manager
         .generate_pair(&pc, "test_subject", claims, "test_flow".to_string())
         .await;
@@ -388,7 +347,7 @@ async fn test_reserved_claims_exp_iat_nbf_rejected() {
 
     // Test iat
     let mut claims = HashMap::new();
-    claims.insert("iat".to_string(), "123456789".to_string());
+    claims.insert("iat".to_string(), Value::String("123456789".to_string()));
     let result = manager
         .generate_pair(&pc, "test_subject", claims, "test_flow".to_string())
         .await;
@@ -396,7 +355,7 @@ async fn test_reserved_claims_exp_iat_nbf_rejected() {
 
     // Test nbf
     let mut claims = HashMap::new();
-    claims.insert("nbf".to_string(), "123456789".to_string());
+    claims.insert("nbf".to_string(), Value::String("123456789".to_string()));
     let result = manager
         .generate_pair(&pc, "test_subject", claims, "test_flow".to_string())
         .await;
@@ -412,9 +371,9 @@ async fn test_non_reserved_custom_claims_accepted() {
     let pc = ParticipantContext::builder().id("test_participant").build();
 
     let mut claims = HashMap::new();
-    claims.insert("custom_field1".to_string(), "value1".to_string());
-    claims.insert("custom_field2".to_string(), "value2".to_string());
-    claims.insert("role".to_string(), "admin".to_string());
+    claims.insert("custom_field1".to_string(), Value::String("value1".to_string()));
+    claims.insert("custom_field2".to_string(), Value::String("value2".to_string()));
+    claims.insert("role".to_string(), Value::String("admin".to_string()));
 
     let result = manager
         .generate_pair(&pc, "test_subject", claims, "test_flow".to_string())
@@ -428,10 +387,11 @@ fn test_custom_refresh_token_size() {
     let fixed_time = DateTime::from_timestamp(1000000000, 0).unwrap();
 
     // Create manager with custom 16-byte refresh token size
+    let secret = ValidatedServerSecret::try_from(b"test_secret_key_32bytes_long!!!!".to_vec()).unwrap();
     let manager = JwtTokenManager::builder()
         .issuer("test_issuer")
         .refresh_endpoint("http://localhost/refresh")
-        .server_secret(b"test_secret_key_32bytes_long!!!!".to_vec())
+        .server_secret(secret)
         .token_duration(3600)
         .renewal_token_duration(86400)
         .refresh_token_bytes(16) // Custom size
@@ -461,10 +421,11 @@ fn test_default_refresh_token_size() {
     let fixed_time = DateTime::from_timestamp(1000000000, 0).unwrap();
 
     // Create manager without specifying refresh_token_bytes (should default to 32)
+    let secret = ValidatedServerSecret::try_from(b"test_secret_key_32bytes_long!!!!".to_vec()).unwrap();
     let manager = JwtTokenManager::builder()
         .issuer("test_issuer")
         .refresh_endpoint("http://localhost/refresh")
-        .server_secret(b"test_secret_key_32bytes_long!!!!".to_vec())
+        .server_secret(secret)
         .token_duration(3600)
         .renewal_token_duration(86400)
         // Note: refresh_token_bytes NOT specified, should default to 32

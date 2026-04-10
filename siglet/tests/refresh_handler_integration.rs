@@ -19,7 +19,9 @@ use dsdk_facet_core::jwt::jwtutils::{
 use dsdk_facet_core::jwt::{JwkSet, JwkSetProvider, KeyFormat, LocalJwtGenerator, LocalJwtVerifier, SigningAlgorithm};
 use dsdk_facet_core::token::client::TokenClient;
 use dsdk_facet_core::token::client::oauth::OAuth2TokenClient;
-use dsdk_facet_core::token::manager::{JwtTokenManager, MemoryRenewableTokenStore, TokenManager};
+use dsdk_facet_core::token::manager::{
+    JwtTokenManager, MemoryRenewableTokenStore, TokenManager, ValidatedServerSecret,
+};
 use dsdk_facet_testcontainers::utils::{get_available_port, wait_for_port_ready};
 use siglet::handler::refresh::TokenRefreshHandler;
 use std::collections::HashMap;
@@ -82,11 +84,12 @@ async fn test_token_renewal() {
             .build(),
     );
 
+    let secret = ValidatedServerSecret::try_from(SERVER_SECRET.to_vec()).unwrap();
     let token_manager: Arc<dyn TokenManager> = Arc::new(
         JwtTokenManager::builder()
             .issuer(PROVIDER_DID)
             .refresh_endpoint("http://placeholder/token")
-            .server_secret(SERVER_SECRET.to_vec())
+            .server_secret(secret)
             .token_store(Arc::new(MemoryRenewableTokenStore::new()))
             .token_generator(provider_generator)
             .client_verifier(verifier.clone())

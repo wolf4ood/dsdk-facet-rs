@@ -20,7 +20,7 @@ use dsdk_facet_core::jwt::{
     JwkSet, JwkSetProvider, JwtGenerationError, JwtGenerator, JwtVerificationError, JwtVerifier, TokenClaims,
 };
 use dsdk_facet_core::token::client::MemoryTokenStore;
-use dsdk_facet_core::token::manager::MemoryRenewableTokenStore;
+use dsdk_facet_core::token::manager::{MemoryRenewableTokenStore, ValidatedServerSecret};
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 
@@ -31,44 +31,51 @@ use std::sync::Arc;
 #[test]
 fn test_generate_server_secret_from_hex() {
     let mut cfg = create_test_config();
-    cfg.token_server_secret = Some("0123456789abcdef0123456789abcdef".to_string());
-
-    let secret = generate_server_secret(&cfg).unwrap();
-
-    assert_eq!(secret.len(), 16);
-    assert_eq!(secret, hex::decode("0123456789abcdef0123456789abcdef").unwrap());
-}
-
-#[test]
-fn test_generate_server_secret_from_hex_uppercase() {
-    let mut cfg = create_test_config();
-    cfg.token_server_secret = Some("0123456789ABCDEF0123456789ABCDEF".to_string());
-
-    let secret = generate_server_secret(&cfg).unwrap();
-
-    assert_eq!(secret.len(), 16);
-    assert_eq!(secret, hex::decode("0123456789ABCDEF0123456789ABCDEF").unwrap());
-}
-
-#[test]
-fn test_generate_server_secret_from_hex_mixed_case() {
-    let mut cfg = create_test_config();
-    cfg.token_server_secret = Some("0123456789AbCdEf0123456789aBcDeF".to_string());
-
-    let secret = generate_server_secret(&cfg).unwrap();
-
-    assert_eq!(secret.len(), 16);
-}
-
-#[test]
-fn test_generate_server_secret_long_hex() {
-    let mut cfg = create_test_config();
-    // 64 hex chars = 32 bytes
+    // 64 hex chars = 32 bytes (minimum valid length)
     cfg.token_server_secret = Some("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_string());
 
     let secret = generate_server_secret(&cfg).unwrap();
 
     assert_eq!(secret.len(), 32);
+    assert_eq!(
+        secret,
+        hex::decode("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef").unwrap()
+    );
+}
+
+#[test]
+fn test_generate_server_secret_from_hex_uppercase() {
+    let mut cfg = create_test_config();
+    cfg.token_server_secret = Some("0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF".to_string());
+
+    let secret = generate_server_secret(&cfg).unwrap();
+
+    assert_eq!(secret.len(), 32);
+    assert_eq!(
+        secret,
+        hex::decode("0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF").unwrap()
+    );
+}
+
+#[test]
+fn test_generate_server_secret_from_hex_mixed_case() {
+    let mut cfg = create_test_config();
+    cfg.token_server_secret = Some("0123456789AbCdEf0123456789aBcDeF0123456789AbCdEf0123456789aBcDeF".to_string());
+
+    let secret = generate_server_secret(&cfg).unwrap();
+
+    assert_eq!(secret.len(), 32);
+}
+
+#[test]
+fn test_generate_server_secret_long_hex() {
+    let mut cfg = create_test_config();
+    // 128 hex chars = 64 bytes
+    cfg.token_server_secret = Some("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_string());
+
+    let secret = generate_server_secret(&cfg).unwrap();
+
+    assert_eq!(secret.len(), 64);
 }
 
 #[test]
@@ -105,14 +112,36 @@ fn test_generate_server_secret_invalid_hex() {
 }
 
 #[test]
-fn test_generate_server_secret_empty_hex() {
+fn test_generate_server_secret_short_hex_rejected() {
+    let mut cfg = create_test_config();
+    // 32 hex chars = 16 bytes — too short
+    cfg.token_server_secret = Some("0123456789abcdef0123456789abcdef".to_string());
+
+    let result = generate_server_secret(&cfg);
+
+    assert!(result.is_err(), "Secret shorter than 32 bytes should be rejected");
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("Server secret must be at least")
+    );
+}
+
+#[test]
+fn test_generate_server_secret_empty_hex_rejected() {
     let mut cfg = create_test_config();
     cfg.token_server_secret = Some("".to_string());
 
     let result = generate_server_secret(&cfg);
 
-    assert!(result.is_ok()); // Empty string decodes to empty vec
-    assert_eq!(result.unwrap().len(), 0);
+    assert!(result.is_err(), "Empty secret should be rejected");
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("Server secret must be at least")
+    );
 }
 
 #[test]
@@ -141,17 +170,20 @@ fn test_generate_server_secret_with_spaces() {
 // create_token_manager() Tests
 // ============================================================================
 
+fn valid_secret() -> ValidatedServerSecret {
+    ValidatedServerSecret::try_from(vec![0u8; 32]).unwrap()
+}
+
 #[test]
 fn test_create_token_manager_with_default_issuer() {
     let cfg = create_test_config(); // No token_issuer
     let jwt_gen = Arc::new(MockJwtGenerator) as Arc<dyn JwtGenerator>;
     let jwt_ver = Arc::new(MockJwtVerifier) as Arc<dyn JwtVerifier>;
-    let secret = vec![0u8; 32];
     let store = Arc::new(MemoryRenewableTokenStore::default());
 
     let manager = create_token_manager(
         &cfg,
-        secret,
+        valid_secret(),
         jwt_gen,
         jwt_ver,
         Arc::new(MockJwtVerifier) as Arc<dyn JwtVerifier>,
@@ -170,12 +202,11 @@ fn test_create_token_manager_with_custom_issuer() {
 
     let jwt_gen = Arc::new(MockJwtGenerator) as Arc<dyn JwtGenerator>;
     let jwt_ver = Arc::new(MockJwtVerifier) as Arc<dyn JwtVerifier>;
-    let secret = vec![0u8; 32];
     let store = Arc::new(MemoryRenewableTokenStore::default());
 
     let manager = create_token_manager(
         &cfg,
-        secret,
+        valid_secret(),
         jwt_gen,
         jwt_ver,
         Arc::new(MockJwtVerifier) as Arc<dyn JwtVerifier>,
@@ -193,12 +224,11 @@ fn test_create_token_manager_with_custom_refresh_endpoint() {
 
     let jwt_gen = Arc::new(MockJwtGenerator) as Arc<dyn JwtGenerator>;
     let jwt_ver = Arc::new(MockJwtVerifier) as Arc<dyn JwtVerifier>;
-    let secret = vec![0u8; 32];
     let store = Arc::new(MemoryRenewableTokenStore::default());
 
     let manager = create_token_manager(
         &cfg,
-        secret,
+        valid_secret(),
         jwt_gen,
         jwt_ver,
         Arc::new(MockJwtVerifier) as Arc<dyn JwtVerifier>,
@@ -218,12 +248,11 @@ fn test_create_token_manager_with_default_refresh_endpoint() {
 
     let jwt_gen = Arc::new(MockJwtGenerator) as Arc<dyn JwtGenerator>;
     let jwt_ver = Arc::new(MockJwtVerifier) as Arc<dyn JwtVerifier>;
-    let secret = vec![0u8; 32];
     let store = Arc::new(MemoryRenewableTokenStore::default());
 
     let manager = create_token_manager(
         &cfg,
-        secret,
+        valid_secret(),
         jwt_gen,
         jwt_ver,
         Arc::new(MockJwtVerifier) as Arc<dyn JwtVerifier>,
@@ -242,21 +271,8 @@ fn test_create_token_manager_with_different_secret_lengths() {
     let jwt_ver = Arc::new(MockJwtVerifier) as Arc<dyn JwtVerifier>;
     let store = Arc::new(MemoryRenewableTokenStore::default());
 
-    // 16 bytes
-    let secret16 = vec![0u8; 16];
-    let manager16 = create_token_manager(
-        &cfg,
-        secret16,
-        jwt_gen.clone(),
-        jwt_ver.clone(),
-        Arc::new(MockJwtVerifier) as Arc<dyn JwtVerifier>,
-        store.clone(),
-        Arc::new(NoOpJwkSetProvider) as Arc<dyn JwkSetProvider>,
-    );
-    assert!(Arc::strong_count(&manager16) >= 1);
-
-    // 32 bytes
-    let secret32 = vec![0u8; 32];
+    // 32 bytes (minimum)
+    let secret32 = ValidatedServerSecret::try_from(vec![0u8; 32]).unwrap();
     let manager32 = create_token_manager(
         &cfg,
         secret32,
@@ -269,7 +285,7 @@ fn test_create_token_manager_with_different_secret_lengths() {
     assert!(Arc::strong_count(&manager32) >= 1);
 
     // 64 bytes
-    let secret64 = vec![0u8; 64];
+    let secret64 = ValidatedServerSecret::try_from(vec![0u8; 64]).unwrap();
     let manager64 = create_token_manager(
         &cfg,
         secret64,
@@ -287,12 +303,11 @@ fn test_create_token_manager_returns_arc() {
     let cfg = create_test_config();
     let jwt_gen = Arc::new(MockJwtGenerator) as Arc<dyn JwtGenerator>;
     let jwt_ver = Arc::new(MockJwtVerifier) as Arc<dyn JwtVerifier>;
-    let secret = vec![0u8; 32];
     let store = Arc::new(MemoryRenewableTokenStore::default());
 
     let manager = create_token_manager(
         &cfg,
-        secret,
+        valid_secret(),
         jwt_gen,
         jwt_ver,
         Arc::new(MockJwtVerifier) as Arc<dyn JwtVerifier>,
@@ -302,9 +317,9 @@ fn test_create_token_manager_returns_arc() {
 
     // Verify it's Arc-wrapped
     let manager_clone = manager.clone();
-    assert!(Arc::strong_count(&manager) == 2);
+    assert_eq!(Arc::strong_count(&manager), 2);
     drop(manager_clone);
-    assert!(Arc::strong_count(&manager) == 1);
+    assert_eq!(Arc::strong_count(&manager), 1);
 }
 
 #[test]
@@ -337,11 +352,12 @@ fn test_secret_generation_and_token_manager_integration() {
 fn test_hex_secret_generation_and_token_manager_integration() {
     // Test that hex-decoded secret can be used with token manager
     let mut cfg = create_test_config();
-    cfg.token_server_secret = Some("0123456789abcdef0123456789abcdef".to_string());
+    // 64 hex chars = 32 bytes
+    cfg.token_server_secret = Some("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_string());
 
     // Generate secret from hex
     let secret = generate_server_secret(&cfg).unwrap();
-    assert_eq!(secret.len(), 16);
+    assert_eq!(secret.len(), 32);
 
     // Use secret in token manager
     let jwt_gen = Arc::new(MockJwtGenerator) as Arc<dyn JwtGenerator>;
@@ -367,12 +383,11 @@ fn test_token_manager_and_handler_integration() {
 
     let jwt_gen = Arc::new(MockJwtGenerator) as Arc<dyn JwtGenerator>;
     let jwt_ver = Arc::new(MockJwtVerifier) as Arc<dyn JwtVerifier>;
-    let secret = vec![0u8; 32];
     let renewable_store = Arc::new(MemoryRenewableTokenStore::default());
 
     let token_manager = create_token_manager(
         &cfg,
-        secret,
+        valid_secret(),
         jwt_gen,
         jwt_ver,
         Arc::new(MockJwtVerifier) as Arc<dyn JwtVerifier>,

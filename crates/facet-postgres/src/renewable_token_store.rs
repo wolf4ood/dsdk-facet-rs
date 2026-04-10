@@ -14,6 +14,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use dsdk_facet_core::token::TokenError;
 use dsdk_facet_core::token::manager::{RenewableTokenEntry, RenewableTokenStore};
+use serde_json::Value;
 use sqlx::PgPool;
 use std::collections::HashMap;
 
@@ -169,7 +170,7 @@ impl RenewableTokenStore for PostgresRenewableTokenStore {
         .map_err(|e| TokenError::database_error(format!("Failed to fetch token by hash: {}", e)))?
         .ok_or_else(|| TokenError::token_not_found(hash))?;
 
-        let claims: HashMap<String, String> = serde_json::from_value(record.claims)
+        let claims: HashMap<String, Value> = serde_json::from_value(record.claims)
             .map_err(|e| TokenError::database_error(format!("Failed to deserialize claims: {}", e)))?;
 
         Ok(RenewableTokenEntry::builder()
@@ -197,7 +198,7 @@ impl RenewableTokenStore for PostgresRenewableTokenStore {
         .map_err(|e| TokenError::database_error(format!("Failed to fetch token by id: {}", e)))?
         .ok_or_else(|| TokenError::token_not_found(id))?;
 
-        let claims: HashMap<String, String> = serde_json::from_value(record.claims)
+        let claims: HashMap<String, Value> = serde_json::from_value(record.claims)
             .map_err(|e| TokenError::database_error(format!("Failed to deserialize claims: {}", e)))?;
 
         Ok(RenewableTokenEntry::builder()
@@ -264,7 +265,7 @@ impl RenewableTokenStore for PostgresRenewableTokenStore {
         .map_err(|e| TokenError::database_error(format!("Failed to fetch token by flow_id: {}", e)))?
         .ok_or_else(|| TokenError::token_not_found(flow_id))?;
 
-        let claims: HashMap<String, String> = serde_json::from_value(record.claims)
+        let claims: HashMap<String, Value> = serde_json::from_value(record.claims)
             .map_err(|e| TokenError::database_error(format!("Failed to deserialize claims: {}", e)))?;
 
         Ok(RenewableTokenEntry::builder()

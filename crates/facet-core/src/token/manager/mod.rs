@@ -30,12 +30,64 @@ use chrono::{DateTime, Utc};
 use hmac::{Hmac, Mac};
 use jwt::JwtGenerator;
 use rand::RngCore;
-use serde_json::Value;
+use serde_json::{Map, Value};
 use sha2::Sha256;
 use uuid::Uuid;
 
 /// Minimum required length for server secret (256 bits for HMAC-SHA256)
 const MIN_SECRET_LENGTH: usize = 32;
+
+/// A server secret that has been validated to meet minimum security requirements.
+///
+/// Can only be constructed via `TryFrom<Vec<u8>>`, which enforces the minimum length.
+pub struct ValidatedServerSecret(Vec<u8>);
+
+impl ValidatedServerSecret {
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.len() == 0
+    }
+}
+
+impl std::fmt::Debug for ValidatedServerSecret {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ValidatedServerSecret([REDACTED])")
+    }
+}
+
+impl PartialEq for ValidatedServerSecret {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+
+impl PartialEq<Vec<u8>> for ValidatedServerSecret {
+    fn eq(&self, other: &Vec<u8>) -> bool {
+        &self.0 == other
+    }
+}
+
+impl TryFrom<Vec<u8>> for ValidatedServerSecret {
+    type Error = TokenError;
+
+    fn try_from(bytes: Vec<u8>) -> Result<Self, Self::Error> {
+        if bytes.len() < MIN_SECRET_LENGTH {
+            return Err(TokenError::general_error(format!(
+                "Server secret must be at least {} bytes, got {}",
+                MIN_SECRET_LENGTH,
+                bytes.len()
+            )));
+        }
+        Ok(Self(bytes))
+    }
+}
 
 /// Reserved JWT claim names that cannot be overridden by custom claims
 const RESERVED_CLAIMS: &[&str] = &["iss", "sub", "aud", "exp", "iat", "nbf", "jti"];
@@ -51,7 +103,7 @@ pub trait TokenManager: Send + Sync {
         &self,
         participant_context: &ParticipantContext,
         subject: &str,
-        claims: HashMap<String, String>,
+        claims: HashMap<String, Value>,
         flow_id: String,
     ) -> Result<RenewableTokenPair, TokenError>;
 
@@ -124,7 +176,7 @@ pub struct RenewableTokenEntry {
     pub expires_at: DateTime<Utc>,
     #[builder(into)]
     pub subject: String, // the counter-party that the token is issued to
-    pub claims: HashMap<String, String>,
+    pub claims: HashMap<String, Value>,
     #[builder(into)]
     pub participant_context_id: String, // the participant context that the token is valid for
     #[builder(into)]
@@ -149,29 +201,15 @@ pub trait RenewableTokenStore: Send + Sync {
     async fn update(&self, old_hash: &str, new_entry: RenewableTokenEntry) -> Result<(), TokenError>;
 }
 
-#[derive(Builder)]
 pub struct JwtTokenManager {
-    #[builder(into)]
     issuer: String,
-
-    #[builder(into)]
     refresh_endpoint: String,
-
     // TODO implement rotation strategy
-    #[builder(into)]
-    server_secret: Vec<u8>,
-
-    #[builder(default = 3600)] // 1 hour
+    server_secret: ValidatedServerSecret,
     token_duration: i64,
-    #[builder(default = 172800)] // 2 days
     renewal_token_duration: i64,
-
-    #[builder(default = 32)]
     refresh_token_bytes: usize,
-
-    #[builder(default = default_clock())]
     clock: Arc<dyn Clock>,
-
     token_store: Arc<dyn RenewableTokenStore>,
     token_generator: Arc<dyn JwtGenerator>,
     client_verifier: Arc<dyn JwtVerifier>,
@@ -179,21 +217,42 @@ pub struct JwtTokenManager {
     jwk_set_provider: Arc<dyn JwkSetProvider>,
 }
 
+#[bon::bon]
 impl JwtTokenManager {
-    /// Validates that the server secret meets minimum security requirements
-    fn validate_server_secret(secret: &[u8]) -> Result<(), TokenError> {
-        if secret.len() < MIN_SECRET_LENGTH {
-            return Err(TokenError::general_error(format!(
-                "Server secret must be at least {} bytes, got {}",
-                MIN_SECRET_LENGTH,
-                secret.len()
-            )));
+    #[builder(finish_fn = build)]
+    pub fn new(
+        #[builder(into)] issuer: String,
+        #[builder(into)] refresh_endpoint: String,
+        // TODO implement rotation strategy
+        server_secret: ValidatedServerSecret,
+        #[builder(default = 3600)] token_duration: i64,           // 1 hour
+        #[builder(default = 172800)] renewal_token_duration: i64, // 2 days
+        #[builder(default = 32)] refresh_token_bytes: usize,
+        #[builder(default = default_clock())] clock: Arc<dyn Clock>,
+        token_store: Arc<dyn RenewableTokenStore>,
+        token_generator: Arc<dyn JwtGenerator>,
+        client_verifier: Arc<dyn JwtVerifier>,
+        provider_verifier: Arc<dyn JwtVerifier>,
+        jwk_set_provider: Arc<dyn JwkSetProvider>,
+    ) -> Self {
+        Self {
+            issuer,
+            refresh_endpoint,
+            server_secret,
+            token_duration,
+            renewal_token_duration,
+            refresh_token_bytes,
+            clock,
+            token_store,
+            token_generator,
+            client_verifier,
+            provider_verifier,
+            jwk_set_provider,
         }
-        Ok(())
     }
 
     /// Validates that custom claims don't contain reserved JWT claim names
-    fn validate_custom_claims(claims: &HashMap<String, String>) -> Result<(), TokenError> {
+    fn validate_custom_claims(claims: &HashMap<String, Value>) -> Result<(), TokenError> {
         for reserved in RESERVED_CLAIMS {
             if claims.contains_key(*reserved) {
                 return Err(TokenError::general_error(format!(
@@ -216,17 +275,14 @@ impl JwtTokenManager {
     }
 
     pub(crate) fn hash(&self, token: &str) -> Result<String, TokenError> {
-        let mut mac = HmacSha256::new_from_slice(&self.server_secret)
+        let mut mac = HmacSha256::new_from_slice(self.server_secret.as_bytes())
             .map_err(|_| TokenError::general_error("Invalid server secret"))?;
         mac.update(token.as_bytes());
         Ok(hex::encode(mac.finalize().into_bytes()))
     }
 
-    fn create_claims(&self, aud: &str, jti: &str, subject: &str, claims: &HashMap<String, String>) -> TokenClaims {
-        let mut custom = serde_json::Map::new();
-        for (k, v) in claims.iter() {
-            custom.insert(k.clone(), Value::String(v.to_string()));
-        }
+    fn create_claims(&self, aud: &str, jti: &str, subject: &str, claims: &HashMap<String, Value>) -> TokenClaims {
+        let mut custom: Map<String, Value> = claims.clone().into_iter().collect();
         custom.insert("jti".to_string(), Value::String(jti.to_string()));
 
         TokenClaims::builder()
@@ -238,7 +294,7 @@ impl JwtTokenManager {
             .build()
     }
 
-    fn expiration(&self) -> Result<DateTime<Utc>, TokenError> {
+    fn renewal_expiration(&self) -> Result<DateTime<Utc>, TokenError> {
         let expires_at = DateTime::from_timestamp(self.clock.now().timestamp() + self.renewal_token_duration, 0)
             .ok_or_else(|| {
                 TokenError::general_error("Failed to calculate token expiration time - timestamp is out of valid range")
@@ -253,12 +309,9 @@ impl TokenManager for JwtTokenManager {
         &self,
         participant_context: &ParticipantContext,
         subject: &str,
-        claims: HashMap<String, String>,
+        claims: HashMap<String, Value>,
         flow_id: String,
     ) -> Result<RenewableTokenPair, TokenError> {
-        // Validate server secret meets minimum security requirements
-        Self::validate_server_secret(&self.server_secret)?;
-
         // Validate custom claims don't override reserved JWT claims
         Self::validate_custom_claims(&claims)?;
 
@@ -272,7 +325,7 @@ impl TokenManager for JwtTokenManager {
 
         let (refresh_token, hashed_refresh_token) = self.create_renewal_token()?;
 
-        let expires_at = self.expiration()?;
+        let expires_at = self.renewal_expiration()?;
 
         // Create and save the renewable token entry
         let entry = RenewableTokenEntry::builder()
@@ -298,9 +351,6 @@ impl TokenManager for JwtTokenManager {
     }
 
     async fn renew(&self, bound_token: &str, refresh_token: &str) -> Result<RenewableTokenPair, TokenError> {
-        // Validate server secret meets minimum security requirements
-        Self::validate_server_secret(&self.server_secret)?;
-
         let hashed = self.hash(refresh_token)?;
         let entry = self
             .token_store
@@ -321,7 +371,7 @@ impl TokenManager for JwtTokenManager {
             return Err(TokenError::NotAuthorized("Invalid token".to_string()));
         }
 
-        let new_expires_at = self.expiration()?;
+        let new_expires_at = self.renewal_expiration()?;
 
         let (new_refresh_token, new_hashed) = self.create_renewal_token()?;
 

@@ -24,7 +24,9 @@ use dsdk_facet_core::jwt::{
 use dsdk_facet_core::lock::{LockManager, MemoryLockManager};
 use dsdk_facet_core::token::client::oauth::OAuth2TokenClient;
 use dsdk_facet_core::token::client::{MemoryTokenStore, TokenClientApi, TokenStore};
-use dsdk_facet_core::token::manager::{JwtTokenManager, MemoryRenewableTokenStore, RenewableTokenStore, TokenManager};
+use dsdk_facet_core::token::manager::{
+    JwtTokenManager, MemoryRenewableTokenStore, RenewableTokenStore, TokenManager, ValidatedServerSecret,
+};
 use dsdk_facet_core::util::encryption::encryption_key;
 use dsdk_facet_core::vault::VaultSigningClient;
 use dsdk_facet_hashicorp_vault::{HashicorpVaultClient, HashicorpVaultConfig, VaultAuthConfig};
@@ -311,8 +313,8 @@ fn create_jwt_components(
 ///
 /// If no secret is provided in config, generates a random 256-bit (32 byte) secret.
 /// This is acceptable for development/testing but NOT recommended for production.
-fn generate_server_secret(cfg: &SigletConfig) -> Result<Vec<u8>, SigletError> {
-    cfg.token_server_secret.as_ref().map_or_else(
+fn generate_server_secret(cfg: &SigletConfig) -> Result<ValidatedServerSecret, SigletError> {
+    let bytes = cfg.token_server_secret.as_ref().map_or_else(
         || {
             let mut secret = vec![0u8; RANDOM_SECRET_SIZE_BYTES];
             thread_rng().fill(&mut secret[..]);
@@ -323,13 +325,14 @@ fn generate_server_secret(cfg: &SigletConfig) -> Result<Vec<u8>, SigletError> {
             hex::decode(secret_hex)
                 .map_err(|e| SigletError::InvalidConfiguration(format!("Invalid server secret hex: {}", e)))
         },
-    )
+    )?;
+    ValidatedServerSecret::try_from(bytes).map_err(|e| SigletError::InvalidConfiguration(e.to_string()))
 }
 
 /// Creates the token manager with all dependencies.
 fn create_token_manager(
     cfg: &SigletConfig,
-    server_secret: Vec<u8>,
+    server_secret: ValidatedServerSecret,
     jwt_generator: Arc<dyn JwtGenerator>,
     client_verifier: Arc<dyn JwtVerifier>,
     provider_verifier: Arc<dyn JwtVerifier>,

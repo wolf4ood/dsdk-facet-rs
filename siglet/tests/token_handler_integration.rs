@@ -20,6 +20,7 @@ use dsdk_facet_core::token::TokenError;
 use dsdk_facet_core::token::client::{MemoryTokenStore, TokenClient, TokenClientApi, TokenData, TokenStore};
 use dsdk_facet_core::token::manager::{RenewableTokenPair, TokenManager};
 use dsdk_facet_testcontainers::utils::{get_available_port, wait_for_port_ready};
+use serde_json::Value;
 use siglet::handler::token::TokenApiHandler;
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -36,7 +37,7 @@ impl TokenManager for NoOpTokenManager {
         &self,
         _participant_context: &ParticipantContext,
         _subject: &str,
-        _claims: HashMap<String, String>,
+        _claims: HashMap<String, Value>,
         _flow_id: String,
     ) -> Result<RenewableTokenPair, TokenError> {
         unimplemented!("not needed for this test")
@@ -137,7 +138,7 @@ async fn test_token_operations() {
     // Existing token is returned
     let response = client.get(&url).send().await.unwrap();
     assert_eq!(response.status(), 200);
-    let body: serde_json::Value = response.json().await.unwrap();
+    let body: Value = response.json().await.unwrap();
     assert_eq!(body["token"], expected_token);
 
     // Delete the token

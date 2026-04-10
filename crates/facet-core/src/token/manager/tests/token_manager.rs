@@ -10,7 +10,7 @@
 //       Metaform Systems, Inc. - initial API and implementation
 //
 
-use super::{JwtTokenManager, MemoryRenewableTokenStore, TokenManager};
+use super::{JwtTokenManager, MemoryRenewableTokenStore, TokenManager, ValidatedServerSecret};
 use crate::context::ParticipantContext;
 use crate::jwt::jwtutils::{StaticSigningKeyResolver, StaticVerificationKeyResolver, generate_ed25519_keypair_pem};
 use crate::jwt::{
@@ -20,7 +20,7 @@ use crate::token::TokenError;
 use crate::token::manager::RenewableTokenStore;
 use crate::util::clock::{Clock, MockClock};
 use chrono::{DateTime, TimeDelta};
-use serde_json::Value;
+use serde_json::{Map, Value};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -75,8 +75,8 @@ async fn test_generate_pair_token_is_valid_jwt() {
         .build();
 
     let mut custom_claims = HashMap::new();
-    custom_claims.insert("role".to_string(), "admin".to_string());
-    custom_claims.insert("department".to_string(), "engineering".to_string());
+    custom_claims.insert("role".to_string(), Value::String("admin".to_string()));
+    custom_claims.insert("department".to_string(), Value::String("engineering".to_string()));
 
     let pair = fixture
         .manager
@@ -120,7 +120,7 @@ async fn test_generate_pair_stores_token_entry() {
         .build();
 
     let mut custom_claims = HashMap::new();
-    custom_claims.insert("custom_field".to_string(), "custom_value".to_string());
+    custom_claims.insert("custom_field".to_string(), Value::String("custom_value".to_string()));
 
     let pair = fixture
         .manager
@@ -276,8 +276,8 @@ async fn test_renew_preserves_subject_and_claims() {
         .build();
 
     let mut custom_claims = HashMap::new();
-    custom_claims.insert("role".to_string(), "admin".to_string());
-    custom_claims.insert("scope".to_string(), "read:write".to_string());
+    custom_claims.insert("role".to_string(), Value::String("admin".to_string()));
+    custom_claims.insert("scope".to_string(), Value::String("read:write".to_string()));
 
     // Generate original pair
     let original_pair = fixture
@@ -559,7 +559,7 @@ async fn test_round_trip_generate_and_renew() {
         .build();
 
     let mut custom_claims = HashMap::new();
-    custom_claims.insert("org_id".to_string(), "org123".to_string());
+    custom_claims.insert("org_id".to_string(), Value::String("org123".to_string()));
 
     // Step 1: Generate token pair
     let original_pair = fixture
@@ -762,10 +762,11 @@ fn create_jwt_token_manager(clock: Arc<dyn Clock>) -> TestFixture {
 
     let store = Arc::new(MemoryRenewableTokenStore::new());
 
+    let secret = ValidatedServerSecret::try_from(b"this_is_exactly_32bytes_long!!!!".to_vec()).unwrap();
     let manager = JwtTokenManager::builder()
         .issuer("did:web:issuer.com")
         .refresh_endpoint("http://localhost:8080/refresh")
-        .server_secret(b"this_is_exactly_32bytes_long!!!!".to_vec())
+        .server_secret(secret)
         .token_duration(3600) // 1 hour
         .renewal_token_duration(86400) // 24 hours
         .clock(clock)
@@ -797,7 +798,7 @@ async fn create_bound_token(
         .sub(subject)
         .aud(participant_context.identifier.clone())
         .exp(clock.now().timestamp() + 300) // 5 minutes
-        .custom(serde_json::Map::from_iter([(
+        .custom(Map::from_iter([(
             "token".to_string(),
             Value::String(access_token.to_string()),
         )]))

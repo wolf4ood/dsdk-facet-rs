@@ -29,6 +29,7 @@ use dsdk_facet_core::context::ParticipantContext;
 use dsdk_facet_core::token::TokenError;
 use dsdk_facet_core::token::client::{TokenData, TokenStore};
 use dsdk_facet_core::token::manager::{RenewableTokenPair, TokenManager};
+use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -61,7 +62,7 @@ impl SigletDataFlowHandler {
     /// - Primitives (string, number, bool) are serialized in raw format (no JSON encoding)
     /// - Null values are serialized as an empty string
     /// - If a string value is itself a JSON-encoded string, it will be unwrapped
-    fn value_to_claim_string(v: &serde_json::Value) -> String {
+    fn value_to_claim_string(v: &Value) -> String {
         use serde_json::Value;
 
         match v {
@@ -171,17 +172,19 @@ impl SigletDataFlowHandler {
         //   - `null` becomes an empty string `""`
         //   - objects and arrays are serialized as compact JSON
         // See value_to_claim_string for the full specification.
-        let mut claims: HashMap<String, String> = flow
-            .metadata
-            .iter()
-            .map(|(k, v)| (k.clone(), Self::value_to_claim_string(v)))
-            .collect();
+        let mut claims: HashMap<String, Value> = flow.metadata.clone();
 
         if matches!(required_source, TokenSource::Provider) {
-            claims.insert(CLAIM_AGREEMENT_ID.to_string(), flow.agreement_id.clone());
-            claims.insert(CLAIM_PARTICIPANT_ID.to_string(), flow.participant_id.clone());
-            claims.insert(CLAIM_COUNTER_PARTY_ID.to_string(), flow.counter_party_id.clone());
-            claims.insert(CLAIM_DATASET_ID.to_string(), flow.dataset_id.clone());
+            claims.insert(CLAIM_AGREEMENT_ID.to_string(), Value::String(flow.agreement_id.clone()));
+            claims.insert(
+                CLAIM_PARTICIPANT_ID.to_string(),
+                Value::String(flow.participant_id.clone()),
+            );
+            claims.insert(
+                CLAIM_COUNTER_PARTY_ID.to_string(),
+                Value::String(flow.counter_party_id.clone()),
+            );
+            claims.insert(CLAIM_DATASET_ID.to_string(), Value::String(flow.dataset_id.clone()));
         }
 
         let pair = self

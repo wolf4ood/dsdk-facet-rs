@@ -20,6 +20,7 @@ use dsdk_facet_core::jwt::JwkSet;
 use dsdk_facet_core::token::TokenError;
 use dsdk_facet_core::token::manager::{RenewableTokenPair, TokenManager};
 use dsdk_facet_testcontainers::utils::{get_available_port, wait_for_port_ready};
+use serde_json::Value;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -35,7 +36,7 @@ impl TokenManager for NoOpTokenManager {
         &self,
         _ctx: &ParticipantContext,
         _subject: &str,
-        _claims: HashMap<String, String>,
+        _claims: HashMap<String, Value>,
         _flow_id: String,
     ) -> Result<RenewableTokenPair, TokenError> {
         unimplemented!("not used in server tests")
