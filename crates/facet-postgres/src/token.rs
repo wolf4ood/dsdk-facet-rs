@@ -15,7 +15,7 @@ use bon::Builder;
 use chrono::DateTime;
 use dsdk_facet_core::context::ParticipantContext;
 use dsdk_facet_core::token::TokenError;
-use dsdk_facet_core::token::client::{TokenData, TokenStore};
+use dsdk_facet_core::token::client::{RefreshedTokenData, TokenData, TokenStore};
 use dsdk_facet_core::util::clock::{Clock, default_clock};
 use dsdk_facet_core::util::encryption::{decrypt, encrypt};
 use sodiumoxide::crypto::secretbox;
@@ -232,7 +232,12 @@ impl TokenStore for PostgresTokenStore {
         Ok(())
     }
 
-    async fn update_token(&self, data: TokenData) -> Result<(), TokenError> {
+    async fn update_token(
+        &self,
+        participant_context: &str,
+        identifier: &str,
+        data: RefreshedTokenData,
+    ) -> Result<(), TokenError> {
         // Encrypt token
         let (encrypted_token, token_nonce) = encrypt(&self.encryption_key, data.token.as_bytes());
 
@@ -252,8 +257,8 @@ impl TokenStore for PostgresTokenStore {
                 last_accessed = $9
              WHERE participant_context = $1 AND identifier = $2",
         )
-        .bind(&data.participant_context)
-        .bind(&data.identifier)
+        .bind(participant_context)
+        .bind(identifier)
         .bind(encrypted_token)
         .bind(token_nonce.as_ref())
         .bind(encrypted_refresh_token)
@@ -267,7 +272,7 @@ impl TokenStore for PostgresTokenStore {
         .rows_affected();
 
         if rows_affected == 0 {
-            return Err(TokenError::token_not_found(&data.identifier));
+            return Err(TokenError::token_not_found(identifier));
         }
 
         Ok(())

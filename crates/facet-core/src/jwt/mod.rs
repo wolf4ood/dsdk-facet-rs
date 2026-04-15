@@ -76,12 +76,9 @@ pub trait JwtGenerator: Send + Sync {
 pub enum JwtGenerationError {
     #[error("Failed to generate token: {0}")]
     GenerationError(String),
-}
 
-impl From<VaultError> for JwtGenerationError {
-    fn from(error: VaultError) -> Self {
-        JwtGenerationError::GenerationError(error.to_string())
-    }
+    #[error("Vault error during token generation")]
+    VaultError(#[from] VaultError),
 }
 
 /// Verifies a JWT and validates claims for the participant context.

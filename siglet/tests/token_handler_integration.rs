@@ -17,7 +17,9 @@ use dsdk_facet_core::context::ParticipantContext;
 use dsdk_facet_core::jwt::{JwkSet, TokenClaims};
 use dsdk_facet_core::lock::MemoryLockManager;
 use dsdk_facet_core::token::TokenError;
-use dsdk_facet_core::token::client::{MemoryTokenStore, TokenClient, TokenClientApi, TokenData, TokenStore};
+use dsdk_facet_core::token::client::{
+    MemoryTokenStore, RefreshedTokenData, TokenClient, TokenClientApi, TokenData, TokenStore,
+};
 use dsdk_facet_core::token::manager::{RenewableTokenPair, TokenManager};
 use dsdk_facet_testcontainers::utils::{get_available_port, wait_for_port_ready};
 use serde_json::Value;
@@ -69,7 +71,7 @@ impl TokenClient for NoOpTokenClient {
         _access_token: &str,
         _refresh_token: &str,
         _refresh_endpoint: &str,
-    ) -> Result<TokenData, TokenError> {
+    ) -> Result<RefreshedTokenData, TokenError> {
         unimplemented!("not needed for this test")
     }
 }

@@ -10,7 +10,7 @@
 //       Metaform Systems, Inc. - initial API and implementation
 //
 
-use super::{TokenClient, TokenData};
+use super::{RefreshedTokenData, TokenClient};
 use crate::context::ParticipantContext;
 use crate::jwt::{JwtGenerator, TokenClaims};
 use crate::token::TokenError;
@@ -52,7 +52,7 @@ impl TokenClient for OAuth2TokenClient {
         access_token: &str,
         refresh_token: &str,
         refresh_endpoint: &str,
-    ) -> Result<TokenData, TokenError> {
+    ) -> Result<RefreshedTokenData, TokenError> {
         let now = self.clock.now().timestamp();
         let mut custom_claims = Map::new();
         custom_claims.insert("token".to_string(), Value::String(access_token.to_string()));
@@ -97,15 +97,11 @@ impl TokenClient for OAuth2TokenClient {
             .refresh_token
             .unwrap_or_else(|| refresh_token.to_string());
 
-        Ok(TokenData {
-            participant_context: participant_context.id.clone(),
-            identifier: endpoint_identifier.to_string(),
+        Ok(RefreshedTokenData {
             token: token_response.access_token,
             refresh_token: new_refresh_token,
             expires_at,
             refresh_endpoint: refresh_endpoint.to_string(),
-            // endpoint is immutable — update_token does not use this field
-            endpoint: String::new(),
         })
     }
 }

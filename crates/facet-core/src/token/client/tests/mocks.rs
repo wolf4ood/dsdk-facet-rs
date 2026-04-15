@@ -13,7 +13,7 @@
 use crate::context::ParticipantContext;
 use crate::lock::{LockGuard, LockManager, UnlockOps};
 use crate::token::TokenError;
-use crate::token::client::{TokenClient, TokenData, TokenStore};
+use crate::token::client::{RefreshedTokenData, TokenClient, TokenData, TokenStore};
 use mockall::mock;
 use mockall::predicate::*;
 use std::sync::Arc;
@@ -47,7 +47,7 @@ mock! {
 
     #[async_trait::async_trait]
     impl TokenClient for TokenClient {
-        async fn refresh_token(&self, participant_context: &ParticipantContext, endpoint_identifier: &str, access_token: &str, refresh_token: &str, refresh_endpoint: &str) -> Result<TokenData, TokenError>;
+        async fn refresh_token(&self, participant_context: &ParticipantContext, endpoint_identifier: &str, access_token: &str, refresh_token: &str, refresh_endpoint: &str) -> Result<RefreshedTokenData, TokenError>;
     }
 }
 
@@ -58,7 +58,7 @@ mock! {
     impl TokenStore for TokenStore {
         async fn get_token(&self, participant_context: &ParticipantContext, identifier: &str) -> Result<TokenData, TokenError>;
         async fn save_token(&self, data: TokenData) -> Result<(), TokenError>;
-        async fn update_token(&self, data: TokenData) -> Result<(), TokenError>;
+        async fn update_token(&self, participant_context: &str, identifier: &str, data: RefreshedTokenData) -> Result<(), TokenError>;
         async fn remove_token(&self, participant_context: &str, identifier: &str) -> Result<(), TokenError>;
         async fn close(&self);
     }

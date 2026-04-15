@@ -73,13 +73,9 @@ async fn test_refresh_token_success() {
         .await
         .expect("Token refresh should succeed");
 
-    assert_eq!(token_data.participant_context, "test-participant");
-    assert_eq!(token_data.identifier, "test-identifier");
     assert_eq!(token_data.token, "new_access_token");
     assert_eq!(token_data.refresh_token, "new_refresh_token");
     assert_eq!(token_data.refresh_endpoint, refresh_endpoint);
-    // endpoint is not populated by OAuth refresh — it is preserved from the original save
-    assert_eq!(token_data.endpoint, "");
 }
 
 /// Verifies that the proof JWT's `sub` claim is derived from `participant_context.identifier`

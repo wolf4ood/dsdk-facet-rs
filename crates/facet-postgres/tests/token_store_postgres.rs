@@ -15,7 +15,7 @@ use chrono::{TimeDelta, Utc};
 
 use dsdk_facet_core::context::ParticipantContext;
 use dsdk_facet_core::token::TokenError;
-use dsdk_facet_core::token::client::{TokenData, TokenStore};
+use dsdk_facet_core::token::client::{RefreshedTokenData, TokenData, TokenStore};
 use dsdk_facet_core::util::clock::{Clock, MockClock};
 use dsdk_facet_core::util::encryption::encryption_key;
 use dsdk_facet_postgres::token::PostgresTokenStore;
@@ -177,17 +177,19 @@ async fn test_postgres_update_token_success() {
     store.save_token(token_data).await.unwrap();
 
     let new_expires_at = initial_time + TimeDelta::seconds(2000);
-    let updated_data = TokenData {
-        participant_context: "participant1".to_string(),
-        identifier: "provider1".to_string(),
-        token: "token_updated".to_string(),
-        refresh_token: "refresh_updated".to_string(),
-        expires_at: new_expires_at,
-        refresh_endpoint: "https://example.com/refresh".to_string(),
-        endpoint: "https://example.com/data".to_string(),
-    };
-
-    store.update_token(updated_data).await.unwrap();
+    store
+        .update_token(
+            "participant1",
+            "provider1",
+            RefreshedTokenData {
+                token: "token_updated".to_string(),
+                refresh_token: "refresh_updated".to_string(),
+                expires_at: new_expires_at,
+                refresh_endpoint: "https://example.com/refresh".to_string(),
+            },
+        )
+        .await
+        .unwrap();
 
     let pc = ParticipantContext::builder().id("participant1").build();
 
@@ -210,17 +212,18 @@ async fn test_postgres_update_nonexistent_token() {
     store.initialize().await.unwrap();
 
     let expires_at = initial_time + TimeDelta::seconds(1000);
-    let token_data = TokenData {
-        participant_context: "participant1".to_string(),
-        identifier: "nonexistent".to_string(),
-        token: "token".to_string(),
-        refresh_token: "refresh".to_string(),
-        expires_at,
-        refresh_endpoint: "https://example.com/refresh".to_string(),
-        endpoint: "https://example.com/data".to_string(),
-    };
-
-    let result = store.update_token(token_data).await;
+    let result = store
+        .update_token(
+            "participant1",
+            "nonexistent",
+            RefreshedTokenData {
+                token: "token".to_string(),
+                refresh_token: "refresh".to_string(),
+                expires_at,
+                refresh_endpoint: "https://example.com/refresh".to_string(),
+            },
+        )
+        .await;
     assert!(result.is_err());
     assert!(matches!(result.unwrap_err(), TokenError::TokenNotFound { .. }));
 }
@@ -413,17 +416,19 @@ async fn test_postgres_save_get_update_remove_flow() {
     store.save_token(token_data).await.unwrap();
 
     let new_expires_at = initial_time + TimeDelta::seconds(2000);
-    let updated_data = TokenData {
-        participant_context: "participant1".to_string(),
-        identifier: "provider1".to_string(),
-        token: "token2".to_string(),
-        refresh_token: "refresh2".to_string(),
-        expires_at: new_expires_at,
-        refresh_endpoint: "https://example.com/refresh".to_string(),
-        endpoint: "https://example.com/data".to_string(),
-    };
-
-    store.update_token(updated_data).await.unwrap();
+    store
+        .update_token(
+            "participant1",
+            "provider1",
+            RefreshedTokenData {
+                token: "token2".to_string(),
+                refresh_token: "refresh2".to_string(),
+                expires_at: new_expires_at,
+                refresh_endpoint: "https://example.com/refresh".to_string(),
+            },
+        )
+        .await
+        .unwrap();
 
     let pc = ParticipantContext::builder().id("participant1").build();
 
@@ -731,17 +736,19 @@ async fn test_context_isolation_update() {
     store.save_token(token_p1).await.unwrap();
     store.save_token(token_p2).await.unwrap();
 
-    let updated_p1 = TokenData {
-        participant_context: "participant1".to_string(),
-        identifier: "provider".to_string(),
-        token: "token_p1_updated".to_string(),
-        refresh_token: "refresh_p1_updated".to_string(),
-        expires_at,
-        refresh_endpoint: "https://p1.example.com/refresh".to_string(),
-        endpoint: "https://example.com/data".to_string(),
-    };
-
-    store.update_token(updated_p1).await.unwrap();
+    store
+        .update_token(
+            "participant1",
+            "provider",
+            RefreshedTokenData {
+                token: "token_p1_updated".to_string(),
+                refresh_token: "refresh_p1_updated".to_string(),
+                expires_at,
+                refresh_endpoint: "https://p1.example.com/refresh".to_string(),
+            },
+        )
+        .await
+        .unwrap();
 
     let pc1 = ParticipantContext::builder().id("participant1").build();
 
@@ -757,17 +764,18 @@ async fn test_context_isolation_update() {
     assert_eq!(p2_result.token, "token_p2");
 
     // Verify participant3 cannot update a non-existent token
-    let update_p3 = TokenData {
-        participant_context: "participant3".to_string(),
-        identifier: "provider".to_string(),
-        token: "token_p3".to_string(),
-        refresh_token: "refresh_p3".to_string(),
-        expires_at,
-        refresh_endpoint: "https://p3.example.com/refresh".to_string(),
-        endpoint: "https://example.com/data".to_string(),
-    };
-
-    let result_p3 = store.update_token(update_p3).await;
+    let result_p3 = store
+        .update_token(
+            "participant3",
+            "provider",
+            RefreshedTokenData {
+                token: "token_p3".to_string(),
+                refresh_token: "refresh_p3".to_string(),
+                expires_at,
+                refresh_endpoint: "https://p3.example.com/refresh".to_string(),
+            },
+        )
+        .await;
     assert!(result_p3.is_err());
     assert!(matches!(result_p3.unwrap_err(), TokenError::TokenNotFound { .. }));
 }
@@ -887,17 +895,19 @@ async fn test_postgres_update_token_preserves_endpoint() {
     store.save_token(token_data).await.unwrap();
 
     let new_expires_at = initial_time + TimeDelta::seconds(7200);
-    let updated_data = TokenData {
-        participant_context: "participant1".to_string(),
-        identifier: "provider1".to_string(),
-        token: "updated_token".to_string(),
-        refresh_token: "updated_refresh".to_string(),
-        expires_at: new_expires_at,
-        refresh_endpoint: "https://auth.example.com/refresh".to_string(),
-        endpoint: "https://ignored.example.com".to_string(),
-    };
-
-    store.update_token(updated_data).await.unwrap();
+    store
+        .update_token(
+            "participant1",
+            "provider1",
+            RefreshedTokenData {
+                token: "updated_token".to_string(),
+                refresh_token: "updated_refresh".to_string(),
+                expires_at: new_expires_at,
+                refresh_endpoint: "https://auth.example.com/refresh".to_string(),
+            },
+        )
+        .await
+        .unwrap();
 
     let pc = ParticipantContext::builder().id("participant1").build();
 

@@ -10,7 +10,7 @@
 //       Metaform Systems, Inc. - initial API and implementation
 //
 
-use super::{TokenData, TokenStore};
+use super::{RefreshedTokenData, TokenData, TokenStore};
 use crate::context::ParticipantContext;
 use crate::token::TokenError;
 use crate::util::clock::{Clock, default_clock};
@@ -125,21 +125,25 @@ impl TokenStore for MemoryTokenStore {
         Ok(())
     }
 
-    async fn update_token(&self, data: TokenData) -> Result<(), TokenError> {
+    async fn update_token(
+        &self,
+        participant_context: &str,
+        identifier: &str,
+        data: RefreshedTokenData,
+    ) -> Result<(), TokenError> {
         let mut tokens = self.tokens.write().await;
-        let key = (data.participant_context.clone(), data.identifier.clone());
+        let key = (participant_context.to_string(), identifier.to_string());
 
         if !tokens.contains_key(&key) {
-            return Err(TokenError::token_not_found(&data.identifier));
+            return Err(TokenError::token_not_found(identifier));
         }
 
         let now = self.clock.now();
         tokens.entry(key).and_modify(|record| {
-            record.token = data.token.clone();
-            record.refresh_token = data.refresh_token.clone();
+            record.token = data.token;
+            record.refresh_token = data.refresh_token;
             record.expires_at = data.expires_at;
             record.refresh_endpoint = data.refresh_endpoint;
-            // endpoint is immutable after creation — not updated on token refresh
             record.last_accessed = now;
         });
 

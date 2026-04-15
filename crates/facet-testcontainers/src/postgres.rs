@@ -25,11 +25,11 @@ pub async fn setup_postgres_container() -> (PgPool, testcontainers::ContainerAsy
     );
 
     // Wait for PostgreSQL to be ready with timeout
-    let pool = tokio::time::timeout(tokio::time::Duration::from_secs(5), async {
+    let pool = tokio::time::timeout(tokio::time::Duration::from_secs(30), async {
         loop {
             match PgPool::connect(&connection_string).await {
                 Ok(pool) => break pool,
-                Err(_) => tokio::task::yield_now().await,
+                Err(_) => tokio::time::sleep(tokio::time::Duration::from_millis(200)).await,
             }
         }
     })

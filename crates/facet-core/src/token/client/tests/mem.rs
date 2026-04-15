@@ -10,7 +10,7 @@
 //       Metaform Systems, Inc. - initial API and implementation
 //
 
-use super::super::{MemoryTokenStore, TokenData, TokenStore};
+use super::super::{MemoryTokenStore, RefreshedTokenData, TokenData, TokenStore};
 use crate::context::ParticipantContext;
 use crate::token::TokenError;
 use crate::util::clock::{Clock, MockClock};
@@ -241,15 +241,16 @@ async fn test_update_token_preserves_endpoint() {
 
     // update_token simulates what happens on a token refresh: only the token credentials change
     store
-        .update_token(TokenData {
-            participant_context: "participant1".to_string(),
-            identifier: "flow-1".to_string(),
-            token: "new-token".to_string(),
-            refresh_token: "new-refresh".to_string(),
-            expires_at: expiration + TimeDelta::hours(1),
-            refresh_endpoint: "https://provider.example.com/refresh".to_string(),
-            endpoint: "https://different.example.com/ignored".to_string(), // should be ignored
-        })
+        .update_token(
+            "participant1",
+            "flow-1",
+            RefreshedTokenData {
+                token: "new-token".to_string(),
+                refresh_token: "new-refresh".to_string(),
+                expires_at: expiration + TimeDelta::hours(1),
+                refresh_endpoint: "https://provider.example.com/refresh".to_string(),
+            },
+        )
         .await
         .unwrap();
 
@@ -406,7 +407,19 @@ async fn test_context_isolation_update() {
         endpoint: "https://p1.example.com/data".to_string(),
     };
 
-    store.update_token(updated_p1).await.unwrap();
+    store
+        .update_token(
+            "participant1",
+            "provider",
+            RefreshedTokenData {
+                token: updated_p1.token,
+                refresh_token: updated_p1.refresh_token,
+                expires_at: updated_p1.expires_at,
+                refresh_endpoint: updated_p1.refresh_endpoint,
+            },
+        )
+        .await
+        .unwrap();
 
     let pc1 = ParticipantContext::builder().id("participant1").build();
 
@@ -432,7 +445,18 @@ async fn test_context_isolation_update() {
         endpoint: "https://p3.example.com/data".to_string(),
     };
 
-    let result_p3 = store.update_token(update_p3).await;
+    let result_p3 = store
+        .update_token(
+            "participant3",
+            "provider",
+            RefreshedTokenData {
+                token: update_p3.token,
+                refresh_token: update_p3.refresh_token,
+                expires_at: update_p3.expires_at,
+                refresh_endpoint: update_p3.refresh_endpoint,
+            },
+        )
+        .await;
     assert!(result_p3.is_err());
     assert!(matches!(result_p3.unwrap_err(), TokenError::TokenNotFound { .. }));
 }

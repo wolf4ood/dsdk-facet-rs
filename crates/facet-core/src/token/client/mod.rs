@@ -87,8 +87,11 @@ impl TokenClientApi {
                     &data.refresh_endpoint,
                 )
                 .await?;
-            self.token_store.update_token(refreshed_data.clone()).await?;
-            refreshed_data.token
+            let token = refreshed_data.token.clone();
+            self.token_store
+                .update_token(&participant_context.id, identifier, refreshed_data)
+                .await?;
+            token
         } else {
             // Token was already refreshed by another thread while we waited for the lock
             data.token
@@ -141,7 +144,7 @@ pub trait TokenClient: Send + Sync {
         access_token: &str,
         refresh_token: &str,
         refresh_endpoint: &str,
-    ) -> Result<TokenData, TokenError>;
+    ) -> Result<RefreshedTokenData, TokenError>;
 }
 
 /// The result of a successful `get_token` call, containing the access token and data endpoint.
@@ -163,6 +166,19 @@ pub struct TokenData {
     pub refresh_endpoint: String,
     /// The URL of the data endpoint this token grants access to.
     pub endpoint: String,
+}
+
+/// Token data returned by a refresh operation.
+///
+/// Contains only the fields that change during a refresh. The `endpoint` is intentionally
+/// excluded — it is immutable after the token is first saved via [`TokenStore::save_token`]
+/// and must never be overwritten by a refresh.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RefreshedTokenData {
+    pub token: String,
+    pub refresh_token: String,
+    pub expires_at: chrono::DateTime<Utc>,
+    pub refresh_endpoint: String,
 }
 
 /// Persists and retrieves tokens with optional expiration tracking.
@@ -194,14 +210,25 @@ pub trait TokenStore: Send + Sync {
     /// Returns database operation errors.
     async fn save_token(&self, data: TokenData) -> Result<(), TokenError>;
 
-    /// Updates a token.
+    /// Updates the mutable fields of a stored token after a refresh.
+    ///
+    /// Only updates the fields that change during a refresh (`token`, `refresh_token`,
+    /// `expires_at`, `refresh_endpoint`). The `endpoint` is intentionally not touched.
     ///
     /// # Arguments
-    /// * `data` - Token data to persist
+    /// * `participant_context` - Participant identifier for isolation
+    /// * `identifier` - Token identifier
+    /// * `data` - Refreshed token data
     ///
     /// # Errors
-    /// Returns database operation errors.
-    async fn update_token(&self, data: TokenData) -> Result<(), TokenError>;
+    /// Returns `TokenError::TokenNotFound` if no token exists for the given key,
+    /// or database operation errors.
+    async fn update_token(
+        &self,
+        participant_context: &str,
+        identifier: &str,
+        data: RefreshedTokenData,
+    ) -> Result<(), TokenError>;
 
     /// Deletes a token.
     ///

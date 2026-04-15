@@ -13,7 +13,7 @@
 use super::mocks::{MockLockManager, MockTokenClient, MockTokenStore, create_dummy_lock_guard};
 use crate::context::ParticipantContext;
 use crate::token::TokenError;
-use crate::token::client::{TokenClientApi, TokenData};
+use crate::token::client::{RefreshedTokenData, TokenClientApi, TokenData};
 use crate::util::clock::MockClock;
 use chrono::{TimeDelta, Utc};
 use mockall::predicate::eq;
@@ -101,7 +101,7 @@ async fn test_get_token_expiring_soon_triggers_refresh() {
         .expect_update_token()
         .once()
         .in_sequence(&mut seq)
-        .returning(|_| Ok(()));
+        .returning(|_, _, _| Ok(()));
 
     let mut token_client = MockTokenClient::new();
     token_client
@@ -115,14 +115,11 @@ async fn test_get_token_expiring_soon_triggers_refresh() {
             eq("https://example.com/refresh"),
         )
         .returning(|_, _, _, _, _| {
-            Ok(TokenData {
-                participant_context: "participant1".to_string(),
-                identifier: "identifier1".to_string(),
+            Ok(RefreshedTokenData {
                 token: "new_token".to_string(),
                 refresh_token: "new_refresh".to_string(),
                 expires_at: Utc::now() + TimeDelta::seconds(3600),
                 refresh_endpoint: "https://example.com/refresh".to_string(),
-                endpoint: "https://example.com/data".to_string(),
             })
         });
 
@@ -181,18 +178,15 @@ async fn test_get_token_expired_triggers_refresh() {
         .expect_update_token()
         .once()
         .in_sequence(&mut seq)
-        .returning(|_| Ok(()));
+        .returning(|_, _, _| Ok(()));
 
     let mut token_client = MockTokenClient::new();
     token_client.expect_refresh_token().once().returning(|_, _, _, _, _| {
-        Ok(TokenData {
-            participant_context: "participant1".to_string(),
-            identifier: "identifier1".to_string(),
+        Ok(RefreshedTokenData {
             token: "refreshed_token".to_string(),
             refresh_token: "new_refresh".to_string(),
             expires_at: Utc::now() + TimeDelta::seconds(3600),
             refresh_endpoint: "https://example.com/refresh".to_string(),
-            endpoint: "https://example.com/data".to_string(),
         })
     });
 
@@ -247,19 +241,16 @@ async fn test_refresh_updates_stored_token() {
         .expect_update_token()
         .once()
         .in_sequence(&mut seq)
-        .withf(|data| data.token == "refreshed_token" && data.refresh_token == "new_refresh_token")
-        .returning(|_| Ok(()));
+        .withf(|_, _, data| data.token == "refreshed_token" && data.refresh_token == "new_refresh_token")
+        .returning(|_, _, _| Ok(()));
 
     let mut token_client = MockTokenClient::new();
     token_client.expect_refresh_token().once().returning(|_, _, _, _, _| {
-        Ok(TokenData {
-            participant_context: "participant1".to_string(),
-            identifier: "identifier1".to_string(),
+        Ok(RefreshedTokenData {
             token: "refreshed_token".to_string(),
             refresh_token: "new_refresh_token".to_string(),
             expires_at: Utc::now() + TimeDelta::seconds(3600),
             refresh_endpoint: "https://example.com/refresh".to_string(),
-            endpoint: "https://example.com/data".to_string(),
         })
     });
 
@@ -369,18 +360,15 @@ async fn test_lock_acquired_during_refresh() {
         .expect_update_token()
         .once()
         .in_sequence(&mut seq)
-        .returning(|_| Ok(()));
+        .returning(|_, _, _| Ok(()));
 
     let mut token_client = MockTokenClient::new();
     token_client.expect_refresh_token().once().returning(|_, _, _, _, _| {
-        Ok(TokenData {
-            participant_context: "participant1".to_string(),
-            identifier: "identifier1".to_string(),
+        Ok(RefreshedTokenData {
             token: "refreshed".to_string(),
             refresh_token: "new_refresh".to_string(),
             expires_at: Utc::now() + TimeDelta::seconds(3600),
             refresh_endpoint: "https://example.com/refresh".to_string(),
-            endpoint: "https://example.com/data".to_string(),
         })
     });
 
@@ -533,18 +521,15 @@ async fn test_refresh_with_custom_refresh_threshold() {
         .expect_update_token()
         .once()
         .in_sequence(&mut seq)
-        .returning(|_| Ok(()));
+        .returning(|_, _, _| Ok(()));
 
     let mut token_client = MockTokenClient::new();
     token_client.expect_refresh_token().once().returning(|_, _, _, _, _| {
-        Ok(TokenData {
-            participant_context: "participant1".to_string(),
-            identifier: "identifier1".to_string(),
+        Ok(RefreshedTokenData {
             token: "refreshed".to_string(),
             refresh_token: "new_refresh".to_string(),
             expires_at: Utc::now() + TimeDelta::seconds(3600),
             refresh_endpoint: "https://example.com/refresh".to_string(),
-            endpoint: "https://example.com/data".to_string(),
         })
     });
 
@@ -617,7 +602,7 @@ async fn test_multiple_tokens_independent_refresh() {
         .expect_update_token()
         .once()
         .in_sequence(&mut seq)
-        .returning(|_| Ok(()));
+        .returning(|_, _, _| Ok(()));
     let mut token_client = MockTokenClient::new();
     token_client
         .expect_refresh_token()
@@ -630,14 +615,11 @@ async fn test_multiple_tokens_independent_refresh() {
             eq("https://example.com/refresh"),
         )
         .returning(|_, _, _, _, _| {
-            Ok(TokenData {
-                participant_context: "participant1".to_string(),
-                identifier: "token1".to_string(),
+            Ok(RefreshedTokenData {
                 token: "refreshed1".to_string(),
                 refresh_token: "new_refresh1".to_string(),
                 expires_at: Utc::now() + TimeDelta::seconds(3600),
                 refresh_endpoint: "https://example.com/refresh".to_string(),
-                endpoint: "https://example.com/data".to_string(),
             })
         });
 
