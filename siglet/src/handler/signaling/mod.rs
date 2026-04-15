@@ -22,7 +22,7 @@ use dataplane_sdk::core::{
     handler::DataFlowHandler,
     model::{
         data_flow::{DataFlow, DataFlowState},
-        messages::DataFlowResponseMessage,
+        messages::DataFlowStatusMessage,
     },
 };
 use dsdk_facet_core::context::ParticipantContext;
@@ -45,13 +45,11 @@ pub const CLAIM_DATASET_ID: &str = "datasetId";
 /// DataFlowHandler implementation for Siglet
 #[derive(Clone, Builder)]
 pub struct SigletDataFlowHandler {
+    #[allow(dead_code)]
     #[builder(into)]
     dataplane_id: String,
-
     token_store: Arc<dyn TokenStore>,
-
     token_manager: Arc<dyn TokenManager>,
-
     transfer_type_mappings: HashMap<String, TransferType>,
 }
 
@@ -225,17 +223,10 @@ impl SigletDataFlowHandler {
     }
 
     /// Builds a DataFlowResponseMessage with an optional data address.
-    fn build_response(&self, state: DataFlowState, data_address: Option<DataAddress>) -> DataFlowResponseMessage {
+    fn build_response(&self, state: DataFlowState, data_address: Option<DataAddress>) -> DataFlowStatusMessage {
         match data_address {
-            Some(addr) => DataFlowResponseMessage::builder()
-                .dataplane_id(self.dataplane_id.clone())
-                .state(state)
-                .data_address(addr)
-                .build(),
-            None => DataFlowResponseMessage::builder()
-                .dataplane_id(self.dataplane_id.clone())
-                .state(state)
-                .build(),
+            Some(addr) => DataFlowStatusMessage::builder().state(state).data_address(addr).build(),
+            None => DataFlowStatusMessage::builder().state(state).build(),
         }
     }
 
@@ -248,7 +239,7 @@ impl SigletDataFlowHandler {
         flow: &DataFlow,
         required_source: TokenSource,
         state: DataFlowState,
-    ) -> HandlerResult<DataFlowResponseMessage> {
+    ) -> HandlerResult<DataFlowStatusMessage> {
         let participant_context = Self::build_participant_context(flow);
         let transfer_type = self.get_transfer_type(flow)?;
 
@@ -280,12 +271,12 @@ impl DataFlowHandler for SigletDataFlowHandler {
         Ok(self.transfer_type_mappings.contains_key(&flow.transfer_type))
     }
 
-    async fn on_start(&self, _tx: &mut Self::Transaction, flow: &DataFlow) -> HandlerResult<DataFlowResponseMessage> {
+    async fn on_start(&self, _tx: &mut Self::Transaction, flow: &DataFlow) -> HandlerResult<DataFlowStatusMessage> {
         self.handle_flow(flow, TokenSource::Provider, DataFlowState::Started)
             .await
     }
 
-    async fn on_prepare(&self, _tx: &mut Self::Transaction, flow: &DataFlow) -> HandlerResult<DataFlowResponseMessage> {
+    async fn on_prepare(&self, _tx: &mut Self::Transaction, flow: &DataFlow) -> HandlerResult<DataFlowStatusMessage> {
         self.handle_flow(flow, TokenSource::Client, DataFlowState::Prepared)
             .await
     }

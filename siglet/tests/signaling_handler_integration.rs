@@ -639,8 +639,8 @@ async fn test_on_start_static_endpoint_when_no_mappings() {
     assert_eq!(data_address.endpoint, "https://pull.example.com");
 }
 
-/// Decodes the JWT payload from the authorization property of a DataFlowResponseMessage.
-fn decode_jwt_payload(response: &dataplane_sdk::core::model::messages::DataFlowResponseMessage) -> Value {
+/// Decodes the JWT payload from the authorization property of a DataFlowStatusMessage.
+fn decode_jwt_payload(response: &dataplane_sdk::core::model::messages::DataFlowStatusMessage) -> Value {
     let data_address = response.data_address.as_ref().expect("Data address should be present");
     let token = data_address
         .get_property("authorization")
