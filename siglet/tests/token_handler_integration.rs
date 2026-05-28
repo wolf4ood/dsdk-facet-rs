@@ -142,6 +142,7 @@ async fn test_token_operations() {
     assert_eq!(response.status(), 200);
     let body: Value = response.json().await.unwrap();
     assert_eq!(body["token"], expected_token);
+    assert_eq!(body["endpoint"], "https://example.com/data");
 
     // Delete the token
     let response = client.delete(&url).send().await.unwrap();

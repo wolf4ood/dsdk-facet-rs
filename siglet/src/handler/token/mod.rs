@@ -29,6 +29,7 @@ pub mod error;
 #[derive(Serialize)]
 pub struct TokenResponse {
     pub token: String,
+    pub endpoint: String,
 }
 
 #[derive(Deserialize)]
@@ -65,7 +66,12 @@ async fn get_token(
     token_client_api
         .get_token(&participant_context, &id, &id)
         .await
-        .map(|result| Ok(Json(TokenResponse { token: result.token })))?
+        .map(|result| {
+            Ok(Json(TokenResponse {
+                token: result.token,
+                endpoint: result.endpoint,
+            }))
+        })?
 }
 
 async fn get_jwk_set(
