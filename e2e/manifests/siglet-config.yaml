@@ -10,6 +10,12 @@ data:
     type = "postgres-vault"
     url = "postgresql://siglet:siglet@postgres:5432/siglet"
 
+    [signaling_auth]
+    mode = "enabled"
+    jwks_url = "http://signaling-jwks/.well-known/jwks.json"
+    audience = "siglet"
+    cache_ttl_seconds = 300
+
     [[transfer_types]]
     transfer_type = "http-pull"
     endpoint_type = "HTTP"
