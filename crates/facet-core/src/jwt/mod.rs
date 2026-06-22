@@ -29,6 +29,7 @@ pub use jwk::{Jwk, JwkKeyOperation, JwkKeyType, JwkPublicKeyUse, JwkSet};
 pub use resolver::VaultVerificationKeyResolver;
 #[cfg(any(test, feature = "test-fixtures"))]
 pub use test_fixtures::{LocalJwtGenerator, StaticSigningKeyResolver, StaticVerificationKeyResolver};
+use uuid::Uuid;
 pub use verifier::LocalJwtVerifier;
 
 use crate::context::ParticipantContext;
@@ -56,6 +57,9 @@ pub struct TokenClaims {
     pub exp: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub nbf: Option<i64>,
+    #[builder(default = Uuid::new_v4().to_string())]
+    #[builder(into)]
+    pub jti: String,
     #[builder(default)]
     #[serde(flatten)]
     pub custom: Map<String, Value>,

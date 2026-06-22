@@ -49,7 +49,10 @@ impl JwtGenerator for VaultJwtGenerator {
             .signing_client
             .get_key_metadata(&key_name, PublicKeyFormat::Multibase)
             .await?;
-        let kid = format!("{}-{}", metadata.key_name, metadata.current_version);
+        let kid = format!(
+            "{}#{}-{}",
+            participant_context.identifier, metadata.key_name, metadata.current_version
+        );
 
         claims.iat = self.clock.now().timestamp();
 
